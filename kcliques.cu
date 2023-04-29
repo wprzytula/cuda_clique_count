@@ -53,6 +53,31 @@ namespace {
         return max_deg;
     }
 
+    std::vector<int> compute_degs(std::vector<Edge> const& edges, int max_vertex) {
+        std::vector<int> deg;
+        deg.resize(max_vertex + 1);
+
+        for (auto const [v1, v2]: edges) {
+            ++deg[v1];
+            ++deg[v2];
+        }
+
+        return deg;
+    }
+
+    void orient_graph(std::vector<Edge>& edges, std::vector<int> const& deg) {
+        for (Edge& edge: edges) {
+            auto [v1, v2] = edge;
+            int const deg_v1 = deg[v1];
+            int const deg_v2 = deg[v2];
+            if (deg_v1 > deg_v2 || (deg_v1 == deg_v2 && v1 > v2)) {
+                // Revert the edge
+                edge.first = v2;
+                edge.second = v1;
+            }
+        }
+    }
+
     struct CSR {
         std::vector<int> col_idx;
         std::vector<int> row_ptr;
@@ -75,40 +100,6 @@ namespace {
                 }
             }
             row_ptr[n] = col_idx.size();
-        }
-
-        CSR extract_induced_subgraph(int vertex) {
-            int i = vertex;
-
-            // find range of row indices for vertex i
-            int start = row_ptr[i];
-            int end = row_ptr[i+1];
-
-            // initialize vector to hold edges of induced subgraph
-            std::vector<Edge> edges;
-
-            for (int j = start; j < end; j++) {
-                for (int k = row_ptr[col_idx[j]]; k < row_ptr[col_idx[j] + 1]; k++) {
-                    // get current column index
-                    int col = col_idx[k];
-
-                    // if col is less than or equal to i, skip edge
-                    if (col <= i) continue;
-
-                    // add edge (i, col) to vector
-                    edges.emplace_back(i, col);
-                }
-            }
-
-            CSR subgraph{edges};
-            return subgraph;
-
-            // for (int row = 0; row < n; ++row) {
-            //     if (row == vertex)
-            //         for (int col_i = row_ptr[row]; col_i < row_ptr[row + 1]; ++col_i) {
-            //             col_idx[col_i]
-            //         }
-            // }
         }
     };
 
@@ -147,6 +138,102 @@ namespace {
         }
         return {v1, v2};
     }
+
+    struct InducedSubgraph {
+        std::vector<int> const subgraph_mapping;
+        std::vector<std::vector<bool>> const adjacency_matrix;
+private:
+        InducedSubgraph(std::vector<int> subgraph_mapping, std::vector<std::vector<bool>> adjacency_matrix)
+            : subgraph_mapping{std::move(subgraph_mapping)}, adjacency_matrix{std::move(adjacency_matrix)} {}
+
+public:
+        static InducedSubgraph extract(CSR const& graph, int vertex) {
+            int const i = vertex;
+
+/* Build subgraph mapping: new_vertex [0..1024] -> old_vertex [0..|V|] */
+            std::vector<int> subgraph_mapping;
+            int const start = graph.row_ptr[i];
+            int const end = graph.row_ptr[i + 1];
+            for (int j = start; j < end; ++j) {
+                // put neighbours in mapping.
+                int const neighbour = graph.col_idx[j];
+                subgraph_mapping.push_back(neighbour);
+            }
+
+/* Build adjacency matrix  */
+            std::vector<std::vector<bool>> adjacency_matrix;
+
+            // It has k rows, where k = |induced subgraph vertices|
+            adjacency_matrix.resize(subgraph_mapping.size());
+
+            auto old = [&subgraph_mapping](int new_v){/* std::cout << "old(" << new_v << ")\n";  */return subgraph_mapping[new_v];};
+            auto neigh = [&graph](int col_i){return graph.col_idx[col_i];};
+
+            // For each row
+            for (int i = 0; i < subgraph_mapping.size(); ++i) {
+                // Retrieve old id of the vertex
+                int const old_v1 = subgraph_mapping[i];
+                // std::cout << "Row with new id: " << i << ", old id: " << old_v1 << "\n";
+
+                // Operate on this row
+                auto& row = adjacency_matrix[i];
+                // Resize it to k
+                row.resize(subgraph_mapping.size());
+
+                int csr_idx = graph.row_ptr[old_v1];
+                int const csr_idx_end = graph.row_ptr[old_v1 + 1];
+
+                // For each cell in this row
+                for (int adj_idx = 0; adj_idx < subgraph_mapping.size(); ++adj_idx) {
+                    // std::cout << "Incremented adj_idx to " << adj_idx << ", now points to " << old(adj_idx) << "\n";
+
+                    if (csr_idx >= csr_idx_end) {
+                            // std::cout << "csr_idx went out of bounds.\n";
+                            goto end_row;
+                    }
+
+                    while (neigh(csr_idx) < old(adj_idx)) {
+                        // std::cout << "Incremented csr_idx to " << csr_idx << "\n";
+                        ++csr_idx;
+                        if (csr_idx >= csr_idx_end) {
+                            // std::cout << "csr_idx went out of bounds.\n";
+                            goto end_row;
+                        }
+                        // std::cout << "csr_idx now points to " << neigh(csr_idx) << "\n";
+                    }
+
+                    // printf("Deciding edge between %d and %d based on value in csr_idx under %d: %d\n",
+                    //      old_v1, old(adj_idx), csr_idx, neigh(csr_idx));
+                    row[adj_idx] = neigh(csr_idx) == old(adj_idx);
+end_row:            ;
+                }
+            }
+            return InducedSubgraph{subgraph_mapping, adjacency_matrix};
+        }
+    };
+
+    std::ostream& operator<<(std::ostream &os, InducedSubgraph const& subgraph) {
+            os << "Subgraph mapping: [ ";
+            for (int old_v: subgraph.subgraph_mapping) {
+                os << old_v << " ";
+            }
+            os << "]\n";
+            os << "Adjacency matrix:\n";
+            os << "  ";
+            for (int old_v: subgraph.subgraph_mapping) {
+                os << old_v << " ";
+            }
+            os << "\n";
+            for (auto const& row: subgraph.adjacency_matrix) {
+                os << "[";
+                for (bool exists: row) {
+                    os << ' ' << (exists ? 'x' : ' ');
+                }
+                os << " ]\n";
+            }
+
+            return os;
+        }
 
     struct VertexSet {
         bool _full;
@@ -321,10 +408,12 @@ int main(int argc, char const* argv[]) {
     std::vector<Edge> edges;
     std::string buffer;
 
+    int max_v = 0;
     while (input_file.good() && !input_file.eof()) {
         std::getline(input_file, buffer);
         if (!buffer.empty()) {
             auto const edge = parse_edge(buffer);
+            max_v = std::max({max_v, edge.first, edge.second});
             edges.push_back(edge);
         }
     }
@@ -335,21 +424,56 @@ int main(int argc, char const* argv[]) {
     }
 
     std::sort(edges.begin(), edges.end());
-    // for (auto const [v1, v2]: edges) {
-    //     std::cout << "(" << v1 << ", " << v2 << ")\n";
-    // }
+    std::cout << "unoriented sorted edges:\n";
+    for (auto const [v1, v2]: edges) {
+        std::cout << "(" << v1 << ", " << v2 << ")\n";
+    }
+    std::cout << "max_v=" << max_v << ")\n";
+
+    { // debug
+        CSR unoriented_graph{edges};
+        std::cout << "unoriented graph:\n";
+        std::cout << unoriented_graph << "\n";
+    }
+
+    auto degs = compute_degs(edges, max_v);
+    orient_graph(edges, degs);
+    std::sort(edges.begin(), edges.end());
+
+    std::cout << "oriented sorted edges:\n";
+    for (auto const [v1, v2]: edges) {
+        std::cout << "(" << v1 << ", " << v2 << ")\n";
+    }
 
     CSR graph{edges};
-    // std::cout << graph << "\n";
+    std::cout << "oriented graph:\n";
+    std::cout << graph << "\n";
 
-    CPUAlgorithm algo{edges, k};
-    auto count = algo.count_cliques();
-    std::cout << "count: [ ";
-    for (auto c: count) {
-        output_file << c << ' ';
-        std::cout << c << ' ';
-    }
-    std::cout << "]\n";
+    // {
+    //     auto subgraph = InducedSubgraph::extract(graph, 0);
+    //     std::cout << subgraph << "\n";
+    // }
+    // {
+    //     auto subgraph = InducedSubgraph::extract(graph, 1);
+    //     std::cout << subgraph << "\n";
+    // }
+    // {
+    //     auto subgraph = InducedSubgraph::extract(graph, 4);
+    //     std::cout << subgraph << "\n";
+    // }
+    // {
+    //     auto subgraph = InducedSubgraph::extract(graph, 5);
+    //     std::cout << subgraph << "\n";
+    // }
+
+    // CPUAlgorithm algo{edges, k};
+    // auto count = algo.count_cliques();
+    // std::cout << "count: [ ";
+    // for (auto c: count) {
+    //     output_file << c << ' ';
+    //     std::cout << c << ' ';
+    // }
+    // std::cout << "]\n";
 
 
 
