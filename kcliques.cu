@@ -2,6 +2,7 @@
 // #include "common/errors.h"
 #include <iostream>
 #include <fstream>
+#include <memory>
 #include <vector>
 #include <utility>
 #include <charconv>
@@ -10,6 +11,12 @@
 #include <cassert>
 
 #define NSTACKS 1
+
+#ifdef PRINT
+constexpr bool const debug = true;
+#else
+constexpr bool const debug = false;
+#endif
 
 namespace {
 
@@ -140,11 +147,11 @@ namespace {
     }
 
     struct InducedSubgraph {
-        std::vector<int> const subgraph_mapping;
+        std::vector<int> const mapping;
         std::vector<std::vector<bool>> const adjacency_matrix;
 private:
-        InducedSubgraph(std::vector<int> subgraph_mapping, std::vector<std::vector<bool>> adjacency_matrix)
-            : subgraph_mapping{std::move(subgraph_mapping)}, adjacency_matrix{std::move(adjacency_matrix)} {}
+        InducedSubgraph(std::vector<int> mapping, std::vector<std::vector<bool>> adjacency_matrix)
+            : mapping{std::move(mapping)}, adjacency_matrix{std::move(adjacency_matrix)} {}
 
 public:
         static InducedSubgraph extract(CSR const& graph, int vertex) {
@@ -210,17 +217,17 @@ end_row:            ;
             }
             return InducedSubgraph{subgraph_mapping, adjacency_matrix};
         }
+        InducedSubgraph operator=(InducedSubgraph const&) = delete;
     };
-
     std::ostream& operator<<(std::ostream &os, InducedSubgraph const& subgraph) {
             os << "Subgraph mapping: [ ";
-            for (int old_v: subgraph.subgraph_mapping) {
+            for (int old_v: subgraph.mapping) {
                 os << old_v << " ";
             }
             os << "]\n";
             os << "Adjacency matrix:\n";
             os << "  ";
-            for (int old_v: subgraph.subgraph_mapping) {
+            for (int old_v: subgraph.mapping) {
                 os << old_v << " ";
             }
             os << "\n";
@@ -235,67 +242,112 @@ end_row:            ;
             return os;
         }
 
+    struct VertexSet;
+    std::ostream& operator<<(std::ostream &os, VertexSet const& vertex_set);
+
     struct VertexSet {
-        bool _full;
-        std::vector<int> vertices;
+        std::vector<bool> vertices;
+        int elems;
     private:
-        VertexSet(bool full, std::vector<int> const& vertices) : _full{full}, vertices{vertices} {}
-        static VertexSet empty() {
-            return VertexSet{false, {}};
+        VertexSet(int n) {
+            vertices.resize(n);
+        }
+        VertexSet(std::vector<bool> vertices) : vertices{std::move(vertices)} {
+            elems = std::accumulate(vertices.cbegin(), vertices.cend(), 0);
+        }
+        static VertexSet empty(int n) {
+            return VertexSet{n};
+        }
+        void remove(int v) {
+            assert(vertices[v]);
+            assert(elems > 0);
+            vertices[v] = false;
+            --elems;
         }
     public:
         bool is_empty() {
             for (auto v: vertices) {
-                if (v)
+                if (v) {
+                    assert(elems > 0);
                     return false;
+                }
             }
+            assert(elems == 0);
             return true;
         }
 
-        static VertexSet full() {
-            return VertexSet{true, {}};
+        // static VertexSet full_row(std::vector<bool> const& row) {
+        //     return VertexSet{row};
+        // }
+
+        static VertexSet full(int n) {
+            // printf("VertexSet::full(%d)\n", n);
+            VertexSet set{n};
+            set.vertices.flip();
+            set.elems = n;
+            return set;
         }
 
         bool contains(int vertex) const {
-            assert(std::is_sorted(vertices.cbegin(), vertices.cend()));
-            return _full || std::binary_search(vertices.cbegin(), vertices.cend(), vertex);
+            return vertices[vertex];
+            // assert(std::is_sorted(vertices.cbegin(), vertices.cend()));
+            // return std::binary_search(vertices.cbegin(), vertices.cend(), vertex);
         }
 
-        VertexSet intersect_adjacent(CSR const& adjacency, int vertex) const {
-            VertexSet set{empty()};
-            // std::cerr << "vertex: " << vertex << std::endl;
-            if (vertex >= adjacency.row_ptr.size()) {
-                return set; // empty
+        VertexSet intersect_adjacent(InducedSubgraph const& subgraph, int vertex) const {
+            if (debug) std::cerr << "Intersecting with neighbours set of vertex: " << vertex << std::endl;
+            // if (vertex >= adjacency.row_ptr.size()) {
+            //     return set; // empty
+            // }
+            VertexSet set{*this};
+            if (debug) {
+                std::cout << set << '\n';
             }
-            int const row_beg = adjacency.row_ptr[vertex];
-            int const row_end = adjacency.row_ptr[vertex + 1];
+            // int const row_beg = adjacency.row_ptr[vertex];
+            // int const row_end = adjacency.row_ptr[vertex + 1];
             // std::cerr << "row_beg: " << row_beg << ", row_end: " << row_end << std::endl;
-            for (auto it = adjacency.col_idx.begin() + row_beg; it < adjacency.col_idx.begin() + row_end; ++it) {
-                int const neighbour = *it;
-                // std::cerr << "neighbour: " << neighbour << std::endl;
-                if (contains(neighbour))
-                    set.vertices.push_back(neighbour);
+            // for (auto it = adjacency.col_idx.begin() + row_beg; it < adjacency.col_idx.begin() + row_end; ++it) {
+            //     int const neighbour = *it;
+            //     // std::cerr << "neighbour: " << neighbour << std::endl;
+            //     if (contains(neighbour))
+            //         set.vertices.push_back(neighbour);
+            // }
+            auto const& row = subgraph.adjacency_matrix[vertex];
+            // std::cout << "row size: " << row.size() << "\n";
+            for (int i = 0; i < row.size(); ++i) {
+                if (set.contains(i) && !row[i]) {
+                    set.remove(i);
+                }
             }
-            if (set.vertices.size() > 0) std::cerr << "Returning VertexSet with len=" << set.vertices.size() << "\n";
+            if (debug && set.elems > 0) std::cerr << "Returning VertexSet with len=" << set.elems << "\n";
             return set;
         }
     };
+
+    std::ostream& operator<<(std::ostream &os, VertexSet const& vertex_set) {
+        os << "VertexSet[ ";
+        for (int i = 0; i < vertex_set.vertices.size(); ++i) {
+            if (vertex_set.vertices[i]) {
+                os << i << " ";
+            }
+        }
+        os << "]";
+        return os;
+    }
 
     struct StackEntry {
         VertexSet vertices;
         std::vector<int> clique_counter;
         int stack_vertex;
-        int chosen_vertex;
         int level;
         int k;
-        StackEntry(CSR const& graph, VertexSet vertices, int k, int stack_vertex, int vertex, int level)
-        : chosen_vertex{vertex}, /* vertices{VertexSet::empty(static_cast<size_t>(graph.max_v))} */
+        StackEntry(VertexSet vertices, int k, int stack_vertex, int level)
+        : /* chosen_vertex{vertex}, */ /* vertices{VertexSet::empty(static_cast<size_t>(graph.max_v))} */
           vertices{std::move(vertices)}, k{k}, level{level}, stack_vertex{stack_vertex}
         {
             clique_counter.resize(k);
         }
     };
-
 
     struct Stack {
         std::vector<StackEntry> entries;
@@ -324,8 +376,15 @@ end_row:            ;
         CSR edges;
         int k;
         std::vector<Stack> stacks;
+        std::vector<InducedSubgraph> subgraphs;
 
-        CPUAlgorithm(CSR edges, int k) : edges{edges}, stacks{NSTACKS}, k{k} {}
+        CPUAlgorithm(CSR edges, int k) : edges{edges}, stacks{NSTACKS}, k{k} {
+            for (int v = 0; v <= edges.max_v; ++v) {
+                auto subgraph = InducedSubgraph::extract(edges, v);
+                if (debug) std::cout << "In relation to vertex " << v << ":\n" << subgraph << "\n";
+                subgraphs.push_back(std::move(subgraph));
+            }
+        }
 
 // Graph traversal for graph orientation method
 // 1 𝑛𝑢𝑚𝐶𝑙𝑖𝑞𝑢𝑒𝑠 = 0
@@ -343,26 +402,33 @@ end_row:            ;
             for (int v = 0; v <= edges.max_v; ++v) {
                 // std::cerr << "First for v=" << v << '\n';
                 auto& stack = stacks[v % NSTACKS];
-                stack.emplace(edges, VertexSet::full(), k, v, v, 1);
+                stack.emplace(VertexSet::full(subgraphs[v].mapping.size()), k, v, 1);
             }
             int i = 0;
             for (auto& stack: stacks) {
                 // std::cerr << "\nSecond for stack " << i++ << "\n";
                 while (!stack.is_empty()) {
                     auto entry = stack.pop();
-                    // std::cerr << "Entry{level=" << entry.level << ", stack_vertex=" << entry.stack_vertex
-                    //     <<   ", vertex=" << entry.chosen_vertex << "}" << std::endl;
-                    auto new_vertices = entry.vertices.intersect_adjacent(edges, entry.chosen_vertex);
-                    for (int v = 0; v <= edges.max_v; ++v) {
-                        if (new_vertices.contains(v)) {
-                            std::cerr << "There exists an edge from " << entry.chosen_vertex << " to " << v
-                                << " on level " << entry.level << ".\n";
-
+                    if (debug) std::cerr << "Entry{level=" << entry.level << ", stack_vertex=" << entry.stack_vertex
+                        <<   ", vertex set=" << entry.vertices << "}" << std::endl;
+                    auto const& subgraph = subgraphs[entry.stack_vertex];
+                    for (int v = 0; v < subgraph.mapping.size(); ++v) {
+                        if (entry.vertices.contains(v)) {
+                            // We've found a `level`-level clique.
                             ++count[entry.level];
 
-                            if (entry.level + 1 < k && !new_vertices.is_empty()) {
-                                stack.emplace(edges, new_vertices, k, entry.stack_vertex, v, entry.level + 1);
+                            // Let's explore deeper.
+                            if (entry.level + 1 < k) {
+                                auto new_vertices = entry.vertices
+                                    .intersect_adjacent(subgraph, v);
+                                if (!new_vertices.is_empty()) {
+                                    stack.emplace(new_vertices, k, entry.stack_vertex, entry.level + 1);
+                                }
                             }
+                            // if (!new_vertices.is_empty()) {
+                                // std::cerr << "There exists an edge from " << entry.chosen_vertex << " to " << v
+                                //         << " on level " << entry.level << ".\n";
+                            // }
                         }
                     }
                 }
@@ -424,13 +490,15 @@ int main(int argc, char const* argv[]) {
     }
 
     std::sort(edges.begin(), edges.end());
-    std::cout << "unoriented sorted edges:\n";
-    for (auto const [v1, v2]: edges) {
-        std::cout << "(" << v1 << ", " << v2 << ")\n";
+    if (debug) {
+        std::cout << "unoriented sorted edges:\n";
+        for (auto const [v1, v2]: edges) {
+            std::cout << "(" << v1 << ", " << v2 << ")\n";
+        }
+        std::cout << "max_v=" << max_v << ")\n";
     }
-    std::cout << "max_v=" << max_v << ")\n";
 
-    { // debug
+    if (debug) { // debug
         CSR unoriented_graph{edges};
         std::cout << "unoriented graph:\n";
         std::cout << unoriented_graph << "\n";
@@ -440,14 +508,18 @@ int main(int argc, char const* argv[]) {
     orient_graph(edges, degs);
     std::sort(edges.begin(), edges.end());
 
-    std::cout << "oriented sorted edges:\n";
-    for (auto const [v1, v2]: edges) {
-        std::cout << "(" << v1 << ", " << v2 << ")\n";
+    if (debug) {
+        std::cout << "oriented sorted edges:\n";
+        for (auto const [v1, v2]: edges) {
+            std::cout << "(" << v1 << ", " << v2 << ")\n";
+        }
     }
 
     CSR graph{edges};
-    std::cout << "oriented graph:\n";
-    std::cout << graph << "\n";
+    if (debug) {
+        std::cout << "oriented graph:\n";
+        std::cout << graph << "\n";
+    }
 
     // {
     //     auto subgraph = InducedSubgraph::extract(graph, 0);
@@ -466,15 +538,18 @@ int main(int argc, char const* argv[]) {
     //     std::cout << subgraph << "\n";
     // }
 
-    // CPUAlgorithm algo{edges, k};
-    // auto count = algo.count_cliques();
-    // std::cout << "count: [ ";
-    // for (auto c: count) {
-    //     output_file << c << ' ';
-    //     std::cout << c << ' ';
-    // }
-    // std::cout << "]\n";
-
+    CPUAlgorithm algo{edges, k};
+    auto count = algo.count_cliques();
+    if (debug) std::cout << "count: [ ";
+    auto it = count.cbegin();
+    if (it != count.cend())
+        output_file << *it;
+    ++it;
+    for (; it != count.cend(); ++it) {
+        output_file << ' ' << *it;
+        if (debug) std::cout << ' ' << *it;
+    }
+    if (debug) std::cout << " ]\n";
 
 
     return EXIT_SUCCESS;
