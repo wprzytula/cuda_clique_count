@@ -260,3 +260,6 @@ clobber: clean
 
 cpu: kcliques.cc
 	g++ kcliques.cc -o cpu
+
+test:
+	./test.sh
