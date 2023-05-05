@@ -10,6 +10,20 @@
 #include <numeric>
 #include <cassert>
 
+
+// https://stackoverflow.com/a/18968893
+// Prior to the kernel define these helper functions and device variable:
+__device__ volatile int sem = 0;
+
+__device__ void acquire_semaphore(volatile int *lock){
+    while (atomicCAS((int *)lock, 0, 1) != 0);
+}
+
+__device__ void release_semaphore(volatile int *lock){
+    *lock = 0;
+    __threadfence();
+}
+
 // #define PRINT
 
 #ifdef PRINT
@@ -21,8 +35,8 @@ constexpr bool const debug = false;
 #define MAX_K 12
 #define MAX_DEG 1024
 #define BLOCK_SIZE 32
-// #define NUM_BLOCKS 64
 #define NUM_BLOCKS 1
+// #define NUM_BLOCKS 1
 
 // dim3 grid(BLOCK_SIZE);
 
@@ -376,28 +390,28 @@ __device__ void intersect_adjacent(InducedSubgraph const& subgraph, bool const* 
 __device__ bool vertex_set_nonempty(bool const* set, int const len) {
     int const tid = threadIdx.x;
 
-    if (tid == 0 && debug) {
-        printf("Reduction!\n");
-        printf("set[ ");
-        for (int i = 0; i < len; ++i) {
-            printf("%p: %i\n", set + i, set[i]);
-        }
-        printf("]\n");
-    }
-    __syncthreads();
+    // if (tid == 0 && debug) {
+    //     printf("Reduction!\n");
+    //     printf("set[ ");
+    //     for (int i = 0; i < len; ++i) {
+    //         printf("%p: %i\n", set + i, set[i]);
+    //     }
+    //     printf("]\n");
+    // }
+    // __syncthreads();
 
     __shared__ bool nonempty[BLOCK_SIZE];
     // printf("Thread %i: nonempty[%i] to %p: %i\n", tid, tid, set + tid, tid < len ? set[tid] : 0);
     nonempty[tid] = tid < len ? set[tid] : 0;
 
-    __syncthreads();
-    if (tid == 0 && debug) {
-        printf("nonempty([ ");
-        for (int i = 0; i < len; ++i) {
-            printf("%i ", nonempty[i]);
-        }
-        printf("]) = \n");
-    }
+    // __syncthreads();
+    // if (tid == 0 && debug) {
+    //     printf("nonempty([ ");
+    //     for (int i = 0; i < len; ++i) {
+    //         printf("%i ", nonempty[i]);
+    //     }
+    //     printf("]) = \n");
+    // }
 
     __syncthreads();
 
@@ -410,13 +424,13 @@ __device__ bool vertex_set_nonempty(bool const* set, int const len) {
         __syncthreads();
         i /= 2;
     }
-    if (tid == 0 && debug) {
-        printf("set_nonempty([ ");
-        for (int i = 0; i < len; ++i) {
-            printf("%i ", set[i]);
-        }
-        printf("]) = %i\n", nonempty[0]);
-    }
+    // if (tid == 0 && debug) {
+    //     printf("set_nonempty([ ");
+    //     for (int i = 0; i < len; ++i) {
+    //         printf("%i ", set[i]);
+    //     }
+    //     printf("]) = %i\n", nonempty[0]);
+    // }
     return nonempty[0];
 }
 
@@ -451,7 +465,7 @@ __global__ void kernel(Data data, int *count) {
     Stack& stack = data.stacks[block_id];
     __shared__ int stack_top;
 
-    if (block_id == 0 && thread_id == 0) printf("\n\n----- RUNNING KERNEL!!! ------\n\n");
+    if (debug && block_id == 0 && thread_id == 0) printf("\n\n----- RUNNING KERNEL!!! ------\n\n");
 
     __shared__ int cliques[MAX_K];
     // Set counters to zeros.
@@ -460,25 +474,25 @@ __global__ void kernel(Data data, int *count) {
     }
 
     // debug
-    if (thread_id == 0) {
-        if (block_id == 0 && debug) {
-            printf("Printing subgraphs.\n\n");
-            for (int i = 0; i < data.csr.vs; ++i) {
-                print_subgraph(data.subgraphs[i]);
-            }
-            printf("\nBeginning STACK ITERATION.\n\n");
-        } else {
-            clock_t start = clock();
-            clock_t now;
-            for (;;) {
-                now = clock();
-                clock_t cycles = now > start ? now - start : now + (0xffffffff - start);
-                if (cycles >= 100000000) {
-                    break;
-                }
-            }
-        }
-    }
+    // if (thread_id == 0 && debug) {
+    //     if (block_id == 0) {
+    //         printf("Printing subgraphs.\n\n");
+    //         for (int i = 0; i < data.csr.vs; ++i) {
+    //             print_subgraph(data.subgraphs[i]);
+    //         }
+    //         printf("\nBeginning STACK ITERATION.\n\n");
+    //     } else {
+    //         clock_t start = clock();
+    //         clock_t now;
+    //         for (;;) {
+    //             now = clock();
+    //             clock_t cycles = now > start ? now - start : now + (0xffffffff - start);
+    //             if (cycles >= 100000000) {
+    //                 break;
+    //             }
+    //         }
+    //     }
+    // }
     __syncthreads();
 
     while ((chosen_vertex = acquire_next_vertex(data)) < data.csr.vs) {
@@ -513,7 +527,7 @@ __global__ void kernel(Data data, int *count) {
                 if (stack.vertices[MAX_DEG * current + v]) { // entry.vertices.contains(v)
                     // We've found a `level`-level clique.
                     if (thread_id == 0)
-                        ++count[stack.level[current]];
+                        ++cliques[stack.level[current]];
                     __syncthreads();
                     // Let's explore deeper.
                     if (stack.level[current] + 1 < data.k) { // entry.level + 1 < k
@@ -566,6 +580,29 @@ __global__ void kernel(Data data, int *count) {
     }
 
     __syncthreads();
+
+    if (debug) {
+        // https://stackoverflow.com/a/18968893
+        if (thread_id == 0)
+            acquire_semaphore(&sem);
+        __syncthreads();
+        //begin critical section
+        // ... your critical section code goes here
+        if (thread_id == 0) {
+            printf("Block %i: count: [ ", block_id);
+            for (int i = 0; i < data.k; ++i) {
+                printf("%i ", cliques[i]);
+            }
+            printf("]\n");
+        }
+        //end critical section
+        __threadfence(); // not strictly necessary for the lock, but to make any global updates in the critical section visible to other threads in the grid
+        __syncthreads();
+        if (threadIdx.x == 0)
+            release_semaphore(&sem);
+        __syncthreads();
+    }
+
     if (thread_id < data.k) {
         atomicAdd(&count[thread_id], cliques[thread_id]);
     }
@@ -655,14 +692,18 @@ void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, int k, 
 
     cliques_cpu[0] = max_v + 1;
 
-    if (debug) std::cout << "count: [ ";
+    if (debug)
+        std::cout << "count: [ ";
     output_file << cliques_cpu[0];
-    if (debug) std::cout << cliques_cpu[0];
+    if (debug)
+        std::cout << cliques_cpu[0];
     for (int i = 1; i < k; ++i) {
         output_file << ' ' << cliques_cpu[i];
-        if (debug) std::cout << ' ' << cliques_cpu[i];
+        if (debug)
+            std::cout << ' ' << cliques_cpu[i];
     }
-    if (debug) std::cout << " ]\n";
+    if (debug)
+        std::cout << " ]\n";
 
     delete[] cliques_cpu;
 }
