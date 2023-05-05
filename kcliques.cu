@@ -20,8 +20,9 @@ constexpr bool const debug = false;
 
 #define MAX_K 12
 #define MAX_DEG 1024
-#define BLOCK_SIZE 256
-#define NUM_BLOCKS 8
+#define BLOCK_SIZE 32
+// #define NUM_BLOCKS 64
+#define NUM_BLOCKS 1
 
 // dim3 grid(BLOCK_SIZE);
 
@@ -276,7 +277,6 @@ __device__ void print_subgraph(InducedSubgraph const& subgraph) {
     }
 
 struct Stack {
-    int top;
     // VertexSet
     bool *vertices; // 2-level array [[true, true, false], [false, false, false]]
     int *elems; // how many elements are there in vertex set in i-th stack frame
@@ -346,7 +346,7 @@ struct Data {
         for (int i = 0; i < NUM_BLOCKS; ++i) {
             Stack& stack = stacks[i];
             HANDLE_ERROR(cudaMalloc(&stack.vertices, max_entries * MAX_DEG * sizeof(*stack.vertices)));
-            HANDLE_ERROR(cudaMemset(stack.vertices, -1, MAX_DEG * sizeof(*stack.vertices))); // first stack entry
+            HANDLE_ERROR(cudaMemset(stack.vertices, /* -1 */1, MAX_DEG * sizeof(*stack.vertices))); // first stack entry
 
             HANDLE_ERROR(cudaMalloc(&stack.elems, max_entries * sizeof(*stack.elems)));
             // HANDLE_ERROR(cudaMemset(&stack.elems, 0, k * sizeof(int)));
@@ -363,38 +363,60 @@ struct Data {
 };
 
 __device__ void intersect_adjacent(InducedSubgraph const& subgraph, bool const* vertex_set, int vertex, bool* out_vertex_set) {
-        // if (debug) std::cerr << "Intersecting with neighbours set of vertex: " << vertex << std::endl;
-        // if (vertex >= adjacency.row_ptr.size()) {
-        //     return set; // empty
-        // }
-        // if (debug) {
-            // std::cout << set << '\n';
-        // }
-
         auto const* row = subgraph.adjacency_matrix + vertex * subgraph.len;
 
         for (int i = threadIdx.x; i < subgraph.len; i += blockDim.x) {
-            printf("Thread %i: I'm intersecting %i-th vertex: vertex_set[%i]=true, row[%i]=false\n", threadIdx.x, i, i, i);
+            printf("Block %i, Thread %i: I'm intersecting %i-th vertex: vertex_set[%i]=%i, row[%i]=%i\n",
+                    blockIdx.x, threadIdx.x, i, i, vertex_set[i], i, row[i]);
             out_vertex_set[i] = vertex_set[i] && row[i]; // set vertex as in or out of set
         }
-        // if (debug && set.elems > 0) std::cerr << "Returning VertexSet with len=" << set.elems << "\n";
     }
 
-__device__ bool vertex_set_nonempty(bool const* set) {
-    __shared__ bool nonempty[BLOCK_SIZE];
+// TODO: reduction for sets bigger than BLOCK_SIZE.
+__device__ bool vertex_set_nonempty(bool const* set, int const len) {
     int const tid = threadIdx.x;
+
+    if (tid == 0) {
+        printf("Reduction!\n");
+        printf("set[ ");
+        for (int i = 0; i < len; ++i) {
+            printf("%p: %i\n", set + i, set[i]);
+        }
+        printf("]\n");
+    }
+    __syncthreads();
+
+    __shared__ bool nonempty[BLOCK_SIZE];
+    // printf("Thread %i: nonempty[%i] to %p: %i\n", tid, tid, set + tid, tid < len ? set[tid] : 0);
+    nonempty[tid] = tid < len ? set[tid] : 0;
+
+    __syncthreads();
+    if (tid == 0) {
+        printf("nonempty([ ");
+        for (int i = 0; i < len; ++i) {
+            printf("%i ", nonempty[i]);
+        }
+        printf("]) = \n");
+    }
+
     __syncthreads();
 
     int i = blockDim.x / 2;
     while (i != 0) {
         if (tid < i) {
-            // printf("Thread %i: reached reduction step i=%i\n", tid, i);
+            // printf("Thread %i: reached reduction step i=%i; [tid]=%i, [tid+i]=%i\n", tid, i, nonempty[tid], nonempty[tid + i]);
             nonempty[tid] |= nonempty[tid + i];
         }
         __syncthreads();
         i /= 2;
     }
-
+    if (tid == 0) {
+        printf("set_nonempty([ ");
+        for (int i = 0; i < len; ++i) {
+            printf("%i ", set[i]);
+        }
+        printf("]) = %i\n", nonempty[0]);
+    }
     return nonempty[0];
 }
 
@@ -402,8 +424,10 @@ __device__ int acquire_next_vertex(Data const& data) {
     int const thread_id = threadIdx.x;
     __shared__ int chosen_vertex;
 
-    if (thread_id == 0)
+    if (thread_id == 0) {
         chosen_vertex = atomicAdd(data.next_vertex, 1);
+        // printf("Block %i: Acquired vertex %i.\n", blockIdx.x, chosen_vertex);
+    }
     __syncthreads();
     return chosen_vertex;
 }
@@ -425,6 +449,9 @@ __global__ void kernel(Data data, int *count) {
     int chosen_vertex;
 
     Stack& stack = data.stacks[block_id];
+    __shared__ int stack_top;
+
+    if (block_id == 0 && thread_id == 0) printf("\n\n----- RUNNING KERNEL!!! ------\n\n");
 
     __shared__ int cliques[MAX_K];
     // Set counters to zeros.
@@ -435,16 +462,18 @@ __global__ void kernel(Data data, int *count) {
     // debug
     if (thread_id == 0) {
         if (block_id == 0) {
+            printf("Printing subgraphs.\n\n");
             for (int i = 0; i < data.csr.vs; ++i) {
                 print_subgraph(data.subgraphs[i]);
             }
+            printf("\nBeginning STACK ITERATION.\n\n");
         } else {
             clock_t start = clock();
             clock_t now;
             for (;;) {
                 now = clock();
                 clock_t cycles = now > start ? now - start : now + (0xffffffff - start);
-                if (cycles >= 1000000) {
+                if (cycles >= 100000000) {
                     break;
                 }
             }
@@ -460,59 +489,90 @@ __global__ void kernel(Data data, int *count) {
 
         // Initialise first stack frame.
         // stack.emplace(VertexSet::full(subgraphs[v].mapping.size()), k, v, 1);
-        stack.top = 0;
-        stack.level[0] = 1;
-        stack.done[0] = false;
-
-        while (stack.top >= 0) {
-            int const current = stack.top;
+        if (thread_id == 0) {
+            stack_top = 0;
+            stack.level[0] = 1;
+            stack.done[0] = false;
+        }
+        __syncthreads();
+        while (stack_top >= 0) {
+            __syncthreads();
+            int const current = stack_top;
             if (debug && thread_id == 0) {
                 printf("Block %i vertex %i operating on stack entry with idx %i, done? %i\n",
                         block_id, chosen_vertex, current, stack.done[current]);
             }
             if (stack.done[current]) {
                 if (thread_id == 0)
-                    --stack.top;
+                    --stack_top;
+                __syncthreads();
                 continue;
             }
             for (int v = 0; v < subgraph.len; ++v) {
+                __syncthreads();
                 if (stack.vertices[MAX_DEG * current + v]) { // entry.vertices.contains(v)
                     // We've found a `level`-level clique.
                     if (thread_id == 0)
                         ++count[stack.level[current]];
-
+                    __syncthreads();
                     // Let's explore deeper.
                     if (stack.level[current] + 1 < data.k) { // entry.level + 1 < k
                         if (thread_id == 0)
-                            ++stack.top;
-                        bool* new_vertices = stack.vertices + stack.top * MAX_DEG;
+                            ++stack_top;
+                        __syncthreads();
+                        bool* new_vertices = stack.vertices + stack_top * MAX_DEG;
+                        if (thread_id == 0) printf("Block %i, Vertex %i: Intersecting with subgraph's vertex %i.\n", block_id, chosen_vertex, v);
                         intersect_adjacent(subgraph, stack.vertices + current * MAX_DEG, v, new_vertices);
 
-                        if (vertex_set_nonempty(new_vertices)) {
+                        __syncthreads();
+
+                        if (vertex_set_nonempty(new_vertices, subgraph.len)) {
                             // stack.emplace(new_vertices, entry.level + 1);
                             if (thread_id == 0) {
-                                stack.level[stack.top] = stack.level[current] + 1;
-                                stack.done[stack.top] = false;
+                                stack.level[stack_top] = stack.level[current] + 1;
+                                stack.done[stack_top] = false;
                             }
                         } else {
                             if (thread_id == 0)
-                                --stack.top;
+                                --stack_top;
+                            __syncthreads();
                         }
                     }
                 }
             }
+            if (thread_id == 0)
+                printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
+            __syncthreads();
+            if (thread_id == 0)
+                printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
             if (thread_id == 0) {
                 stack.done[current] = true;
-                if (current == stack.top) /*leaf reached, go back*/{
+                if (current == stack_top) /*leaf reached, go back*/{
                     printf("Vertex %i: Reached leaf in entry %i.\n", chosen_vertex, current);
-                    --stack.top;
+                    --stack_top;
+                } else {
+                    printf("Vertex %i: Finished work over node in entry %i.\n", chosen_vertex, current);
                 }
             }
+            if (thread_id == 0)
+                printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
+            __syncthreads();
+            if (thread_id == 0)
+                printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
+        }
+        if (thread_id == 0) {
+            printf("Block %i, Vertex %i: Finished stack iteration.\n", block_id, chosen_vertex);
         }
     }
 
+    __syncthreads();
     if (thread_id < data.k) {
         atomicAdd(&count[thread_id], cliques[thread_id]);
+    }
+
+    __syncthreads();
+    if (thread_id == 0) {
+        printf("Block %i, Finished!\n", block_id);
     }
 }
 
@@ -554,7 +614,7 @@ void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, int k, 
         std::cout << graph << "\n";
     }
 
-    for (int v = 0; v <= max_v; ++v) {
+    if (debug) for (int v = 0; v <= max_v; ++v) {
         auto subgraph = cpu::InducedSubgraph::extract(graph, v);
         std::cout << subgraph << "\n";
     }
@@ -592,6 +652,8 @@ void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, int k, 
 
     cudaEventDestroy(kernel_run);
     cudaEventDestroy(stop);
+
+    cliques_cpu[0] = max_v + 1;
 
     if (debug) std::cout << "count: [ ";
     output_file << cliques_cpu[0];
