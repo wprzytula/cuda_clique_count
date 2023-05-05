@@ -10,7 +10,7 @@
 #include <numeric>
 #include <cassert>
 
-#define PRINT
+// #define PRINT
 
 #ifdef PRINT
 constexpr bool const debug = true;
@@ -305,7 +305,7 @@ struct Data {
         auto tmp_subgraphs = std::make_unique<InducedSubgraph[]>(edges.n);
         for (int v = 0; v < edges.n; ++v) {
             auto cpu_subgraph = cpu::InducedSubgraph::extract(edges, v);
-            printf("Filling subgraph with idx %i\n", v);
+            // if (debug) printf("Filling subgraph with idx %i\n", v);
             auto& subgraph = tmp_subgraphs[v];
             subgraph.len = cpu_subgraph.mapping.size();
             if (cpu_subgraph.mapping.size() > 0) {
@@ -319,11 +319,11 @@ struct Data {
                 HANDLE_ERROR(cudaMalloc(&subgraph.adjacency_matrix,
                                 cpu_subgraph.adjacency_matrix.size() * cpu_subgraph.adjacency_matrix[0].size() * sizeof(int)));
                 for (int r = 0; r < cpu_subgraph.adjacency_matrix.size(); ++r) {
-                    printf("cudaMemcpy(dst=%p, src=%p, count=%li)\n",
-                            subgraph.adjacency_matrix + r * cpu_subgraph.adjacency_matrix[r].size(),
-                            cpu_subgraph.adjacency_matrix[r].data(),
-                            cpu_subgraph.adjacency_matrix[r].size()
-                    );
+                    // if (debug) printf("cudaMemcpy(dst=%p, src=%p, count=%li)\n",
+                            // subgraph.adjacency_matrix + r * cpu_subgraph.adjacency_matrix[r].size(),
+                            // cpu_subgraph.adjacency_matrix[r].data(),
+                            // cpu_subgraph.adjacency_matrix[r].size()
+                    // );
                     HANDLE_ERROR(cudaMemcpy(subgraph.adjacency_matrix + r * cpu_subgraph.adjacency_matrix[r].size(),
                             cpu_subgraph.adjacency_matrix[r].data(),
                             cpu_subgraph.adjacency_matrix[r].size() * sizeof(int),
@@ -357,7 +357,7 @@ struct Data {
 
         // printf("Before cudaMalloc: next_vertex=%p\n", next_vertex);
         HANDLE_ERROR(cudaMalloc(&next_vertex, sizeof(*next_vertex)));
-        printf("After cudaMalloc: next_vertex=%p\n", next_vertex);
+        // printf("After cudaMalloc: next_vertex=%p\n", next_vertex);
         HANDLE_ERROR(cudaMemset(next_vertex, 0, sizeof(*next_vertex)));
     }
 };
@@ -366,7 +366,7 @@ __device__ void intersect_adjacent(InducedSubgraph const& subgraph, bool const* 
         auto const* row = subgraph.adjacency_matrix + vertex * subgraph.len;
 
         for (int i = threadIdx.x; i < subgraph.len; i += blockDim.x) {
-            printf("Block %i, Thread %i: I'm intersecting %i-th vertex: vertex_set[%i]=%i, row[%i]=%i\n",
+            if (debug) printf("Block %i, Thread %i: I'm intersecting %i-th vertex: vertex_set[%i]=%i, row[%i]=%i\n",
                     blockIdx.x, threadIdx.x, i, i, vertex_set[i], i, row[i]);
             out_vertex_set[i] = vertex_set[i] && row[i]; // set vertex as in or out of set
         }
@@ -376,7 +376,7 @@ __device__ void intersect_adjacent(InducedSubgraph const& subgraph, bool const* 
 __device__ bool vertex_set_nonempty(bool const* set, int const len) {
     int const tid = threadIdx.x;
 
-    if (tid == 0) {
+    if (tid == 0 && debug) {
         printf("Reduction!\n");
         printf("set[ ");
         for (int i = 0; i < len; ++i) {
@@ -391,7 +391,7 @@ __device__ bool vertex_set_nonempty(bool const* set, int const len) {
     nonempty[tid] = tid < len ? set[tid] : 0;
 
     __syncthreads();
-    if (tid == 0) {
+    if (tid == 0 && debug) {
         printf("nonempty([ ");
         for (int i = 0; i < len; ++i) {
             printf("%i ", nonempty[i]);
@@ -410,7 +410,7 @@ __device__ bool vertex_set_nonempty(bool const* set, int const len) {
         __syncthreads();
         i /= 2;
     }
-    if (tid == 0) {
+    if (tid == 0 && debug) {
         printf("set_nonempty([ ");
         for (int i = 0; i < len; ++i) {
             printf("%i ", set[i]);
@@ -461,7 +461,7 @@ __global__ void kernel(Data data, int *count) {
 
     // debug
     if (thread_id == 0) {
-        if (block_id == 0) {
+        if (block_id == 0 && debug) {
             printf("Printing subgraphs.\n\n");
             for (int i = 0; i < data.csr.vs; ++i) {
                 print_subgraph(data.subgraphs[i]);
@@ -521,7 +521,7 @@ __global__ void kernel(Data data, int *count) {
                             ++stack_top;
                         __syncthreads();
                         bool* new_vertices = stack.vertices + stack_top * MAX_DEG;
-                        if (thread_id == 0) printf("Block %i, Vertex %i: Intersecting with subgraph's vertex %i.\n", block_id, chosen_vertex, v);
+                        if (thread_id == 0 && debug) printf("Block %i, Vertex %i: Intersecting with subgraph's vertex %i.\n", block_id, chosen_vertex, v);
                         intersect_adjacent(subgraph, stack.vertices + current * MAX_DEG, v, new_vertices);
 
                         __syncthreads();
@@ -540,27 +540,27 @@ __global__ void kernel(Data data, int *count) {
                     }
                 }
             }
-            if (thread_id == 0)
+            if (thread_id == 0 && debug)
                 printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
             __syncthreads();
-            if (thread_id == 0)
+            if (thread_id == 0 && debug)
                 printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
             if (thread_id == 0) {
                 stack.done[current] = true;
                 if (current == stack_top) /*leaf reached, go back*/{
-                    printf("Vertex %i: Reached leaf in entry %i.\n", chosen_vertex, current);
+                    if (debug) printf("Vertex %i: Reached leaf in entry %i.\n", chosen_vertex, current);
                     --stack_top;
                 } else {
-                    printf("Vertex %i: Finished work over node in entry %i.\n", chosen_vertex, current);
+                    if (debug) printf("Vertex %i: Finished work over node in entry %i.\n", chosen_vertex, current);
                 }
             }
-            if (thread_id == 0)
+            if (thread_id == 0 && debug)
                 printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
             __syncthreads();
-            if (thread_id == 0)
+            if (thread_id == 0 && debug)
                 printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
         }
-        if (thread_id == 0) {
+        if (thread_id == 0 && debug) {
             printf("Block %i, Vertex %i: Finished stack iteration.\n", block_id, chosen_vertex);
         }
     }
@@ -571,7 +571,7 @@ __global__ void kernel(Data data, int *count) {
     }
 
     __syncthreads();
-    if (thread_id == 0) {
+    if (thread_id == 0 && debug) {
         printf("Block %i, Finished!\n", block_id);
     }
 }
