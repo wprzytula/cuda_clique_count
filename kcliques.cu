@@ -399,21 +399,46 @@ struct Data {
             cudaMemcpyHostToDevice)
         );
 
+        subgraphs = nullptr;
         HANDLE_ERROR(cudaMalloc(&subgraphs, NUM_BLOCKS * sizeof(InducedSubgraph)));
 
         // Initialise stacks
         int const max_entries = k * MAX_DEG;
         for (int i = 0; i < NUM_BLOCKS; ++i) {
             Stack& stack = stacks[i];
+            stack.vertices = nullptr;
             HANDLE_ERROR(cudaMalloc(&stack.vertices, max_entries * MAX_DEG * sizeof(*stack.vertices)));
             HANDLE_ERROR(cudaMemset(stack.vertices, /* -1 */1, MAX_DEG * sizeof(*stack.vertices))); // first stack entry
 
+            stack.level = nullptr;
             HANDLE_ERROR(cudaMalloc(&stack.level, max_entries * sizeof(*stack.level)));
             HANDLE_ERROR(cudaMalloc(&stack.done, max_entries * sizeof(*stack.done)));
         }
 
+        next_vertex = nullptr;
         HANDLE_ERROR(cudaMalloc(&next_vertex, sizeof(*next_vertex)));
         HANDLE_ERROR(cudaMemset(next_vertex, 0, sizeof(*next_vertex)));
+    }
+
+    ~Data() {
+        return; // FIXME: why this results in InvalidArgument error returned?
+        // free graph
+        HANDLE_ERROR(cudaFree(csr.row_ptr));
+        HANDLE_ERROR(cudaFree(csr.col_idx));
+
+        // free subgraphs
+        HANDLE_ERROR(cudaFree(subgraphs));
+
+        // free stacks
+        for (int i = 0; i < NUM_BLOCKS; ++i) {
+            Stack const& stack = stacks[i];
+            HANDLE_ERROR(cudaFree(stack.vertices));
+            HANDLE_ERROR(cudaFree(stack.level));
+            HANDLE_ERROR(cudaFree(stack.done));
+        }
+
+        // free next_vertex
+        HANDLE_ERROR(cudaFree(next_vertex));
     }
 };
 
