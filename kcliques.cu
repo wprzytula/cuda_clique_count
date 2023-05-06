@@ -573,8 +573,6 @@ __global__ void kernel(Data data, unsigned long long *count) {
 }
 
 static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_file, int k) {
-    std::sort(edges.begin(), edges.end());
-
     if (debug) {
         std::cout << "unoriented sorted edges before making vertices consecutive:\n";
         for (auto const [v1, v2]: edges) {
@@ -592,6 +590,7 @@ static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_f
         std::cout << "max_v=" << max_v << ")\n";
     }
 
+    std::sort(edges.begin(), edges.end());
     if (debug) { // debug
         cpu::CSR unoriented_graph{edges};
         std::cout << "unoriented graph:\n";
