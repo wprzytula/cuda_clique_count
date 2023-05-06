@@ -553,8 +553,8 @@ __global__ void kernel(Data data, int *count) {
             // if (thread_id == 0 && debug)
             //     printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
             __syncthreads();
-            if (thread_id == 0 && debug)
-                printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
+            // if (thread_id == 0 && debug)
+            //     printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
             if (thread_id == 0) {
                 stack.done[current] = true;
                 if (current == stack_top) /*leaf reached, go back*/{
@@ -567,8 +567,8 @@ __global__ void kernel(Data data, int *count) {
             // if (thread_id == 0 && debug)
             //     printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
             __syncthreads();
-            if (thread_id == 0 && debug)
-                printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
+            // if (thread_id == 0 && debug)
+            //     printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
         }
         if (thread_id == 0 && debug) {
             printf("Block %i, Vertex %i: Finished stack iteration.\n", block_id, chosen_vertex);
