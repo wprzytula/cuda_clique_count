@@ -386,7 +386,6 @@ __device__ void intersect_adjacent(InducedSubgraph const& subgraph, bool const* 
         }
     }
 
-// TODO: reduction for sets bigger than BLOCK_SIZE.
 __device__ bool vertex_set_nonempty(bool const* set, int const len) {
     int const tid = threadIdx.x;
 
@@ -401,8 +400,11 @@ __device__ bool vertex_set_nonempty(bool const* set, int const len) {
     // __syncthreads();
 
     __shared__ bool nonempty[BLOCK_SIZE];
-    // printf("Thread %i: nonempty[%i] to %p: %i\n", tid, tid, set + tid, tid < len ? set[tid] : 0);
-    nonempty[tid] = tid < len ? set[tid] : 0;
+    nonempty[tid] = 0;
+    for (int i = tid; i < len; i += blockDim.x) {
+        // if (debug) printf("Thread %i: nonempty[%i] to %p: %i\n", tid, tid, set + i, i < len ? set[i] : 0);
+        nonempty[tid] |= i < len ? set[i] : 0;
+    }
 
     // __syncthreads();
     // if (tid == 0 && debug) {
@@ -603,8 +605,8 @@ __global__ void kernel(Data data, int *count) {
         __syncthreads();
     }
 
-    if (thread_id < data.k) {
-        atomicAdd(&count[thread_id], cliques[thread_id]);
+    for (int i = thread_id; i < data.k; i += blockDim.x) {
+        atomicAdd(&count[i], cliques[i]);
     }
 
     __syncthreads();
