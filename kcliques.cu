@@ -35,7 +35,7 @@ constexpr bool const debug = false;
 #define MAX_K 12
 #define MAX_DEG 1024
 #define BLOCK_SIZE 32
-#define NUM_BLOCKS 1
+#define NUM_BLOCKS 64
 // #define NUM_BLOCKS 1
 
 // dim3 grid(BLOCK_SIZE);
@@ -686,6 +686,10 @@ void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, int k, 
 
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
+
+    float elapsed_kernel;
+    HANDLE_ERROR(cudaEventElapsedTime(&elapsed_kernel, kernel_run, stop));
+    printf("Elapsed kernel: %.3fms", elapsed_kernel);
 
     cudaEventDestroy(kernel_run);
     cudaEventDestroy(stop);
