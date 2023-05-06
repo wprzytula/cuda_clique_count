@@ -497,10 +497,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
                     __syncthreads();
                     // Let's explore deeper.
                     if (stack.level[current] + 1 < data.k) { // entry.level + 1 < k
-                        if (thread_id == 0)
-                            ++stack_top;
-                        __syncthreads();
-                        bool* new_vertices = stack.vertices + stack_top * MAX_DEG;
+                        bool* new_vertices = stack.vertices + (stack_top + 1) * MAX_DEG;
                         if (thread_id == 0 && debug) printf("Block %i, Vertex %i: Intersecting with subgraph's vertex %i.\n", block_id, chosen_vertex, v);
                         intersect_adjacent(subgraph, stack.vertices + current * MAX_DEG, v, new_vertices);
 
@@ -509,14 +506,12 @@ __global__ void kernel(Data data, unsigned long long *count) {
                         if (vertex_set_nonempty(new_vertices, subgraph.len)) {
                             // stack.emplace(new_vertices, entry.level + 1);
                             if (thread_id == 0) {
+                                ++stack_top;
                                 stack.level[stack_top] = stack.level[current] + 1;
                                 stack.done[stack_top] = false;
                             }
-                        } else {
-                            if (thread_id == 0)
-                                --stack_top;
-                            __syncthreads();
                         }
+                        __syncthreads();
                     }
                 }
             }
