@@ -292,7 +292,6 @@ __device__ void print_subgraph(InducedSubgraph const& subgraph) {
 struct Stack {
     // VertexSet
     bool *vertices; // 2-level array [[true, true, false], [false, false, false]]
-    int *elems; // how many elements are there in vertex set in i-th stack frame
 
     bool* done;
 
@@ -361,16 +360,11 @@ struct Data {
             HANDLE_ERROR(cudaMalloc(&stack.vertices, max_entries * MAX_DEG * sizeof(*stack.vertices)));
             HANDLE_ERROR(cudaMemset(stack.vertices, /* -1 */1, MAX_DEG * sizeof(*stack.vertices))); // first stack entry
 
-            HANDLE_ERROR(cudaMalloc(&stack.elems, max_entries * sizeof(*stack.elems)));
-            // HANDLE_ERROR(cudaMemset(&stack.elems, 0, k * sizeof(int)));
-
             HANDLE_ERROR(cudaMalloc(&stack.level, max_entries * sizeof(*stack.level)));
             HANDLE_ERROR(cudaMalloc(&stack.done, max_entries * sizeof(*stack.done)));
         }
 
-        // printf("Before cudaMalloc: next_vertex=%p\n", next_vertex);
         HANDLE_ERROR(cudaMalloc(&next_vertex, sizeof(*next_vertex)));
-        // printf("After cudaMalloc: next_vertex=%p\n", next_vertex);
         HANDLE_ERROR(cudaMemset(next_vertex, 0, sizeof(*next_vertex)));
     }
 };
