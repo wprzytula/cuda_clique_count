@@ -1,3 +1,3 @@
 
 
-Computing adjacency matrix in parallel (instead of sequentially on one thread per block) gave speedup from 3.70s to 3.48s on com-dblp sample graph.
+Computing adjacency matrix in parallel (instead of sequentially on one thread per block) yielded speedup from 3.70s to 3.48s on com-dblp sample graph.

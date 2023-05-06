@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <numeric>
 #include <cassert>
+#include <unordered_map>
 
 
 // https://stackoverflow.com/a/18968893
@@ -42,7 +43,24 @@ constexpr bool const debug = false;
 namespace cpu { namespace {
     using Edge = std::pair<int, int>;
 
-    // TODO: remap vertices so that they are consecutive natural numbers
+    // returns max_v
+    int make_vertices_consecutive_natural_numbers(std::vector<Edge>& edges) {
+        int next_num = 0;
+        std::unordered_map<int, int> map;
+        for (auto const [v1, v2]: edges) {
+            if (map.find(v1) == map.cend()) {
+                map[v1] = next_num++;
+            }
+            if (map.find(v2) == map.cend()) {
+                map[v2] = next_num++;
+            }
+        }
+        for (auto& edge: edges) {
+            edge.first = map[edge.first];
+            edge.second = map[edge.second];
+        }
+        return next_num - 1;
+    }
 
     int find_max_vertex(std::vector<Edge> const& edges) {
         int max_vertex = 0;
@@ -581,10 +599,20 @@ __global__ void kernel(Data data, unsigned long long *count) {
     }
 }
 
-static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_file, int k, int max_v) {
+static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_file, int k) {
     std::sort(edges.begin(), edges.end());
+
     if (debug) {
-        std::cout << "unoriented sorted edges:\n";
+        std::cout << "unoriented sorted edges before making vertices consecutive:\n";
+        for (auto const [v1, v2]: edges) {
+            std::cout << "(" << v1 << ", " << v2 << ")\n";
+        }
+    }
+
+    int const max_v = cpu::make_vertices_consecutive_natural_numbers(edges);
+
+    if (debug) {
+        std::cout << "unoriented sorted edges with vertices made consecutive:\n";
         for (auto const [v1, v2]: edges) {
             std::cout << "(" << v1 << ", " << v2 << ")\n";
         }
@@ -712,12 +740,10 @@ int main(int argc, char const* argv[]) {
     std::vector<cpu::Edge> edges;
     std::string buffer;
 
-    int max_v = 0;
     while (input_file.good() && !input_file.eof()) {
         std::getline(input_file, buffer);
         if (!buffer.empty()) {
             auto const edge = cpu::parse_edge(buffer);
-            max_v = std::max({max_v, edge.first, edge.second});
             edges.push_back(edge);
         }
     }
@@ -727,7 +753,7 @@ int main(int argc, char const* argv[]) {
         return EXIT_FAILURE;
     }
 
-    count_cliques(edges, output_file, k, max_v);
+    count_cliques(edges, output_file, k);
 
     return EXIT_SUCCESS;
 }
