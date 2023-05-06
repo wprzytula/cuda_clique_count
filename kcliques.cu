@@ -450,26 +450,6 @@ __global__ void kernel(Data data, unsigned long long *count) {
         cliques[i] = 0;
     }
 
-    // debug
-    // if (thread_id == 0 && debug) {
-    //     if (block_id == 0) {
-    //         printf("Printing subgraphs.\n\n");
-    //         for (int i = 0; i < data.csr.vs; ++i) {
-    //             print_subgraph(data.subgraphs[i]);
-    //         }
-    //         printf("\nBeginning STACK ITERATION.\n\n");
-    //     } else {
-    //         clock_t start = clock();
-    //         clock_t now;
-    //         for (;;) {
-    //             now = clock();
-    //             clock_t cycles = now > start ? now - start : now + (0xffffffff - start);
-    //             if (cycles >= 100000000) {
-    //                 break;
-    //             }
-    //         }
-    //     }
-    // }
     __syncthreads();
 
     while ((chosen_vertex = acquire_next_vertex(data)) < data.csr.vs) {
@@ -540,11 +520,8 @@ __global__ void kernel(Data data, unsigned long long *count) {
                     }
                 }
             }
-            // if (thread_id == 0 && debug)
-            //     printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
             __syncthreads();
-            // if (thread_id == 0 && debug)
-            //     printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
+
             if (thread_id == 0) {
                 stack.done[current] = true;
                 if (current == stack_top) /*leaf reached, go back*/{
@@ -554,11 +531,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
                     if (debug) printf("Vertex %i: Finished work over node in entry %i.\n", chosen_vertex, current);
                 }
             }
-            // if (thread_id == 0 && debug)
-            //     printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
             __syncthreads();
-            // if (thread_id == 0 && debug)
-            //     printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
         }
         if (thread_id == 0 && debug) {
             printf("Block %i, Vertex %i: Finished stack iteration.\n", block_id, chosen_vertex);
