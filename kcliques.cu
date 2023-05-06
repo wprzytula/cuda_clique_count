@@ -267,16 +267,23 @@ struct InducedSubgraph {
     int adjacency_matrix[MAX_DEG * MAX_DEG]; // len * len
 
     __device__ void extract(CSR const& graph, int const v) {
-        len = 0;
-
-/* Build subgraph mapping: new_vertex [0..1024] -> old_vertex [0..|V|] */
+        int const tid = threadIdx.x;
         int const start = graph.row_ptr[v];
         int const end = graph.row_ptr[v + 1];
-        for (int j = start; j < end; ++j) {
-            // put neighbours in mapping.
-            int const neighbour = graph.col_idx[j];
-            mapping[len++] = neighbour;
+
+        if (tid == 0) {
+            len = end - start;
         }
+        __syncthreads();
+
+/* Build subgraph mapping: new_vertex [0..1024] -> old_vertex [0..|V|] */
+        for (int j = tid; start + j < end; j += blockDim.x) {
+            // put neighbours in mapping.
+            int const neighbour = graph.col_idx[start + j];
+            mapping[j] = neighbour;
+        }
+
+        __syncthreads();
 
 /* Build adjacency matrix  */
         // It has k rows, where k = |induced subgraph vertices|
@@ -284,6 +291,7 @@ struct InducedSubgraph {
         auto old = [&mapping](int new_v){/* std::cout << "old(" << new_v << ")\n";  */return mapping[new_v];};
         auto neigh = [&graph](int col_i){return graph.col_idx[col_i];};
 
+        if (tid == 0) {
         // For each row
         for (int i = 0; i < len; ++i) {
             // Retrieve old id of the vertex
@@ -321,6 +329,7 @@ struct InducedSubgraph {
                 row[adj_idx] = neigh(csr_idx) == old(adj_idx);
 end_row:            ;
             }
+        }
         }
     }
 };
@@ -571,10 +580,10 @@ __global__ void kernel(Data data, int *count) {
         }
 
         // Compute InducedSubgraph
-        if (thread_id == 0) {
+        {
             InducedSubgraph& subgraph = data.subgraphs[chosen_vertex];
             subgraph.extract(data.csr, chosen_vertex);
-            if (debug) print_subgraph(subgraph);
+            if (debug && thread_id == 0) print_subgraph(subgraph);
         }
         InducedSubgraph const& subgraph = data.subgraphs[chosen_vertex];
 
