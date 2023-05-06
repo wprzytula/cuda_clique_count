@@ -35,9 +35,9 @@ constexpr bool const debug = false;
 
 #define MAX_K 12
 #define MAX_DEG 1024
-#define BLOCK_SIZE 32
-#define NUM_BLOCKS 64
-// #define NUM_BLOCKS 1
+#define BLOCK_SIZE 2
+// #define NUM_BLOCKS 64
+#define NUM_BLOCKS 1
 
 // dim3 grid(BLOCK_SIZE);
 
@@ -410,10 +410,10 @@ __device__ bool vertex_set_nonempty(bool const* set, int const len) {
     // __syncthreads();
     // if (tid == 0 && debug) {
     //     printf("nonempty([ ");
-    //     for (int i = 0; i < len; ++i) {
+    //     for (int i = 0; i < BLOCK_SIZE && i < len; ++i) {
     //         printf("%i ", nonempty[i]);
     //     }
-    //     printf("]) = \n");
+    //     printf("])\n");
     // }
 
     __syncthreads();
@@ -427,13 +427,13 @@ __device__ bool vertex_set_nonempty(bool const* set, int const len) {
         __syncthreads();
         i /= 2;
     }
-    // if (tid == 0 && debug) {
-    //     printf("set_nonempty([ ");
-    //     for (int i = 0; i < len; ++i) {
-    //         printf("%i ", set[i]);
-    //     }
-    //     printf("]) = %i\n", nonempty[0]);
-    // }
+    if (tid == 0 && debug) {
+        printf("set_nonempty([ ");
+        for (int i = 0; i < len; ++i) {
+            printf("%i ", set[i]);
+        }
+        printf("]) = %i\n", nonempty[0]);
+    }
     return nonempty[0];
 }
 
@@ -557,8 +557,8 @@ __global__ void kernel(Data data, int *count) {
                     }
                 }
             }
-            if (thread_id == 0 && debug)
-                printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
+            // if (thread_id == 0 && debug)
+            //     printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
             __syncthreads();
             if (thread_id == 0 && debug)
                 printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
@@ -571,8 +571,8 @@ __global__ void kernel(Data data, int *count) {
                     if (debug) printf("Vertex %i: Finished work over node in entry %i.\n", chosen_vertex, current);
                 }
             }
-            if (thread_id == 0 && debug)
-                printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
+            // if (thread_id == 0 && debug)
+            //     printf("Vertex %i: Reached __syncthreads() at line %d.\n", chosen_vertex, __LINE__ + 1);
             __syncthreads();
             if (thread_id == 0 && debug)
                 printf("Vertex %i: Passed __syncthreads() at line %d.\n", chosen_vertex, __LINE__ - 2);
