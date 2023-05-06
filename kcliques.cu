@@ -263,8 +263,66 @@ struct CSR {
 
 struct InducedSubgraph {
     int len;
-    int* mapping; // len
-    int* adjacency_matrix; // len * len
+    int mapping[MAX_DEG]; // len
+    int adjacency_matrix[MAX_DEG * MAX_DEG]; // len * len
+
+    __device__ void extract(CSR const& graph, int const v) {
+        len = 0;
+
+/* Build subgraph mapping: new_vertex [0..1024] -> old_vertex [0..|V|] */
+        int const start = graph.row_ptr[v];
+        int const end = graph.row_ptr[v + 1];
+        for (int j = start; j < end; ++j) {
+            // put neighbours in mapping.
+            int const neighbour = graph.col_idx[j];
+            mapping[len++] = neighbour;
+        }
+
+/* Build adjacency matrix  */
+        // It has k rows, where k = |induced subgraph vertices|
+        auto const& mapping = this->mapping;
+        auto old = [&mapping](int new_v){/* std::cout << "old(" << new_v << ")\n";  */return mapping[new_v];};
+        auto neigh = [&graph](int col_i){return graph.col_idx[col_i];};
+
+        // For each row
+        for (int i = 0; i < len; ++i) {
+            // Retrieve old id of the vertex
+            int const old_v1 = mapping[i];
+            // std::cout << "Row with new id: " << i << ", old id: " << old_v1 << "\n";
+
+            // Operate on this row
+            auto *const row = adjacency_matrix + i * len;
+            // Resize it to k
+
+            int csr_idx = graph.row_ptr[old_v1];
+            int const csr_idx_end = graph.row_ptr[old_v1 + 1];
+
+            // For each cell in this row
+            for (int adj_idx = 0; adj_idx < len; ++adj_idx) {
+                // std::cout << "Incremented adj_idx to " << adj_idx << ", now points to " << old(adj_idx) << "\n";
+
+                if (csr_idx >= csr_idx_end) {
+                        // std::cout << "csr_idx went out of bounds.\n";
+                        goto end_row;
+                }
+
+                while (neigh(csr_idx) < old(adj_idx)) {
+                    // std::cout << "Incremented csr_idx to " << csr_idx << "\n";
+                    ++csr_idx;
+                    if (csr_idx >= csr_idx_end) {
+                        // std::cout << "csr_idx went out of bounds.\n";
+                        goto end_row;
+                    }
+                    // std::cout << "csr_idx now points to " << neigh(csr_idx) << "\n";
+                }
+
+                // printf("Deciding edge between %d and %d based on value in csr_idx under %d: %d\n",
+                //      old_v1, old(adj_idx), csr_idx, neigh(csr_idx));
+                row[adj_idx] = neigh(csr_idx) == old(adj_idx);
+end_row:            ;
+            }
+        }
+    }
 };
 
 __device__ void print_subgraph(InducedSubgraph const& subgraph) {
@@ -309,14 +367,30 @@ struct Data {
 
     Data(cpu::CSR const& edges, int const k) : k{k} {
         csr.vs = edges.n;
+
         csr.row_len = edges.row_ptr.size();
+        csr.row_ptr = nullptr;
         HANDLE_ERROR(cudaMalloc(&csr.row_ptr, edges.row_ptr.size() * sizeof(int)));
+        HANDLE_ERROR(cudaMemcpy(
+            csr.row_ptr,
+            edges.row_ptr.data(),
+            edges.row_ptr.size() * sizeof(int),
+            cudaMemcpyHostToDevice)
+        );
+
         csr.col_len = edges.col_idx.size();
-        HANDLE_ERROR(cudaMalloc(&csr.col_idx, edges.n * sizeof(int)));
+        csr.col_idx = nullptr;
+        HANDLE_ERROR(cudaMalloc(&csr.col_idx, edges.col_idx.size() * sizeof(int)));
+        HANDLE_ERROR(cudaMemcpy(
+            csr.col_idx,
+            edges.col_idx.data(),
+            edges.col_idx.size() * sizeof(int),
+            cudaMemcpyHostToDevice)
+        );
 
         HANDLE_ERROR(cudaMalloc(&subgraphs, edges.n * sizeof(InducedSubgraph)));
 
-        auto tmp_subgraphs = std::make_unique<InducedSubgraph[]>(edges.n);
+/*         auto tmp_subgraphs = std::make_unique<InducedSubgraph[]>(edges.n);
         for (int v = 0; v < edges.n; ++v) {
             auto cpu_subgraph = cpu::InducedSubgraph::extract(edges, v);
             // if (debug) printf("Filling subgraph with idx %i\n", v);
@@ -353,7 +427,7 @@ struct Data {
                      tmp_subgraphs.get(),
                      edges.n * sizeof(InducedSubgraph),
                      cudaMemcpyHostToDevice)
-        );
+        ); */
 
         // Initialise stacks
         int const max_entries = k * MAX_DEG;
@@ -494,6 +568,13 @@ __global__ void kernel(Data data, int *count) {
     while ((chosen_vertex = acquire_next_vertex(data)) < data.csr.vs) {
         if (debug && thread_id == 0) {
             printf("Block %i has acquired vertex %i\n", block_id, chosen_vertex);
+        }
+
+        // Compute InducedSubgraph
+        if (thread_id == 0) {
+            InducedSubgraph& subgraph = data.subgraphs[chosen_vertex];
+            subgraph.extract(data.csr, chosen_vertex);
+            if (debug) print_subgraph(subgraph);
         }
         InducedSubgraph const& subgraph = data.subgraphs[chosen_vertex];
 
