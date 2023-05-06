@@ -301,7 +301,11 @@ struct InducedSubgraph {
 
             // Operate on this row
             auto *const row = adjacency_matrix + i * len;
-            // Resize it to k
+
+            // Clear the row after previous subgraph (zeros are assumed in the algorithm)
+            for (int j = 0; j < len; ++j) {
+                row[j] = false;
+            }
 
             int csr_idx = graph.row_ptr[old_v1];
             int const csr_idx_end = graph.row_ptr[old_v1 + 1];
@@ -398,7 +402,7 @@ struct Data {
             cudaMemcpyHostToDevice)
         );
 
-        HANDLE_ERROR(cudaMalloc(&subgraphs, edges.n * sizeof(InducedSubgraph)));
+        HANDLE_ERROR(cudaMalloc(&subgraphs, NUM_BLOCKS * sizeof(InducedSubgraph)));
 
 /*         auto tmp_subgraphs = std::make_unique<InducedSubgraph[]>(edges.n);
         for (int v = 0; v < edges.n; ++v) {
@@ -582,11 +586,11 @@ __global__ void kernel(Data data, int *count) {
 
         // Compute InducedSubgraph
         {
-            InducedSubgraph& subgraph = data.subgraphs[chosen_vertex];
+            InducedSubgraph& subgraph = data.subgraphs[block_id];
             subgraph.extract(data.csr, chosen_vertex);
             if (debug && thread_id == 0) print_subgraph(subgraph);
         }
-        InducedSubgraph const& subgraph = data.subgraphs[chosen_vertex];
+        InducedSubgraph const& subgraph = data.subgraphs[block_id];
 
         // Initialise first stack frame.
         // stack.emplace(VertexSet::full(subgraphs[v].mapping.size()), k, v, 1);
