@@ -39,8 +39,6 @@ constexpr bool const debug = false;
 // #define NUM_BLOCKS 64
 #define NUM_BLOCKS 1
 
-// dim3 grid(BLOCK_SIZE);
-
 namespace cpu { namespace {
 
 // Graph traversal for graph orientation method
@@ -621,7 +619,7 @@ using cpu::parse_edge;
 using cpu::compute_degs;
 using cpu::orient_graph;
 
-void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, int k, int max_v) {
+static void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, int k, int max_v) {
     std::sort(edges.begin(), edges.end());
     if (debug) {
         std::cout << "unoriented sorted edges:\n";
