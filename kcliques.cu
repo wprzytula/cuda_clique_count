@@ -35,6 +35,7 @@ constexpr bool const debug = false;
 
 #define MAX_K 12
 #define MAX_DEG 1024
+#define MODULO 1'000'000'000;
 #define BLOCK_SIZE 32
 // #define BLOCK_SIZE 2
 #define NUM_BLOCKS 64
@@ -504,8 +505,10 @@ __global__ void kernel(Data data, int *count) {
                 __syncthreads();
                 if (stack.vertices[MAX_DEG * current + v]) { // entry.vertices.contains(v)
                     // We've found a `level`-level clique.
-                    if (thread_id == 0)
-                        ++cliques[stack.level[current]];
+                    if (thread_id == 0) {
+                        int* level_cliques = &cliques[stack.level[current]];
+                        *level_cliques = (*level_cliques + 1) % MODULO;
+                    }
                     __syncthreads();
                     // Let's explore deeper.
                     if (stack.level[current] + 1 < data.k) { // entry.level + 1 < k
