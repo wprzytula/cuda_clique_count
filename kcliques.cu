@@ -459,7 +459,6 @@ __device__ int acquire_next_vertex(Data const& data) {
 __global__ void kernel(Data data, int *count) {
     int const block_id = blockIdx.x;
     int const thread_id = threadIdx.x;
-    // int const warp_id = thread_id % 32;
 
     int chosen_vertex;
 
@@ -470,8 +469,8 @@ __global__ void kernel(Data data, int *count) {
 
     __shared__ int cliques[MAX_K];
     // Set counters to zeros.
-    if (thread_id < MAX_K) {
-        cliques[thread_id] = 0;
+    for (int i = thread_id; i < data.k; i += blockDim.x) {
+        cliques[i] = 0;
     }
 
     // debug
