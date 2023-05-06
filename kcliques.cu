@@ -650,43 +650,47 @@ static void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, 
         std::cout << subgraph << "\n";
     }
 
-    // input data
-    Data data{edges, k};
+    auto cliques_cpu = std::make_unique<int[]>(k);
 
-    // output data
-    int *cliques_gpu, *cliques_cpu = new int[k];
+    { // GPU section
+        // input data
+        Data data{edges, k};
 
-    HANDLE_ERROR(cudaMalloc(&cliques_gpu, k * sizeof(int)));
-    HANDLE_ERROR(cudaMemset(cliques_gpu, 0, k * sizeof(int)));
+        // output data
+        int *cliques_gpu;
 
-    cudaEvent_t kernel_run, stop;
-    cudaEventCreate(&kernel_run);
-    cudaEventCreate(&stop);
+        HANDLE_ERROR(cudaMalloc(&cliques_gpu, k * sizeof(int)));
+        HANDLE_ERROR(cudaMemset(cliques_gpu, 0, k * sizeof(int)));
 
-    cudaEventRecord(kernel_run, 0);
+        cudaEvent_t kernel_run, stop;
+        cudaEventCreate(&kernel_run);
+        cudaEventCreate(&stop);
 
-    // RUN KERNEL, RUN!
-    kernel<<<NUM_BLOCKS, BLOCK_SIZE>>>(data, cliques_gpu);
+        cudaEventRecord(kernel_run, 0);
+
+        // RUN KERNEL, RUN!
+        kernel<<<NUM_BLOCKS, BLOCK_SIZE>>>(data, cliques_gpu);
 
 
-    // Get back the output data
-    HANDLE_ERROR(cudaMemcpy(cliques_cpu,
-			   cliques_gpu,
-			   k * sizeof(int),
-			   cudaMemcpyDeviceToHost)
-    );
+        // Get back the output data
+        HANDLE_ERROR(cudaMemcpy(cliques_cpu.get(),
+                cliques_gpu,
+                k * sizeof(int),
+                cudaMemcpyDeviceToHost)
+        );
 
-    HANDLE_ERROR(cudaFree(cliques_gpu));
+        HANDLE_ERROR(cudaFree(cliques_gpu));
 
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
+        cudaEventRecord(stop, 0);
+        cudaEventSynchronize(stop);
 
-    float elapsed_kernel;
-    HANDLE_ERROR(cudaEventElapsedTime(&elapsed_kernel, kernel_run, stop));
-    printf("Elapsed kernel: %.3fms\n", elapsed_kernel);
+        float elapsed_kernel;
+        HANDLE_ERROR(cudaEventElapsedTime(&elapsed_kernel, kernel_run, stop));
+        printf("Elapsed kernel: %.3fms\n", elapsed_kernel);
 
-    cudaEventDestroy(kernel_run);
-    cudaEventDestroy(stop);
+        cudaEventDestroy(kernel_run);
+        cudaEventDestroy(stop);
+    }
 
     cliques_cpu[0] = max_v + 1;
 
@@ -701,9 +705,7 @@ static void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, 
     }
     s << " ]\n";
     // if (debug)
-        std::cout << s.str();
-
-    delete[] cliques_cpu;
+    std::cout << s.str();
 }
 
 int main(int argc, char const* argv[]) {
