@@ -53,6 +53,8 @@ namespace cpu { namespace {
 
     using Edge = std::pair<int, int>;
 
+    // TODO: remap vertices so that they are consecutive natural numbers
+
     int find_max_vertex(std::vector<Edge> const& edges) {
         int max_vertex = 0;
         for (auto const [v1, v2]: edges) {
