@@ -1,6 +1,7 @@
 #include "cuda.h"
 #include "common/errors.h"
 #include <iostream>
+#include <sstream>
 #include <fstream>
 #include <memory>
 #include <vector>
@@ -691,25 +692,25 @@ void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, int k, 
 
     float elapsed_kernel;
     HANDLE_ERROR(cudaEventElapsedTime(&elapsed_kernel, kernel_run, stop));
-    printf("Elapsed kernel: %.3fms", elapsed_kernel);
+    printf("Elapsed kernel: %.3fms\n", elapsed_kernel);
 
     cudaEventDestroy(kernel_run);
     cudaEventDestroy(stop);
 
     cliques_cpu[0] = max_v + 1;
 
-    if (debug)
-        std::cout << "count: [ ";
+    std::stringstream s;
+
+    s << "count: [ ";
     output_file << cliques_cpu[0];
-    if (debug)
-        std::cout << cliques_cpu[0];
+    s << cliques_cpu[0];
     for (int i = 1; i < k; ++i) {
         output_file << ' ' << cliques_cpu[i];
-        if (debug)
-            std::cout << ' ' << cliques_cpu[i];
+        s << ' ' << cliques_cpu[i];
     }
-    if (debug)
-        std::cout << " ]\n";
+    s << " ]\n";
+    // if (debug)
+        std::cout << s.str();
 
     delete[] cliques_cpu;
 }
