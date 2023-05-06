@@ -585,8 +585,8 @@ __global__ void kernel(Data data, int *count) {
         atomicAdd(&count[i], cliques[i]);
     }
 
-    __syncthreads();
     if (thread_id == 0 && debug) {
+        __syncthreads();
         printf("Block %i, Finished!\n", block_id);
     }
 }
