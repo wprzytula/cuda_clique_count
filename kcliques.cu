@@ -292,12 +292,10 @@ struct InducedSubgraph {
         auto old = [&mapping](int new_v){/* std::cout << "old(" << new_v << ")\n";  */return mapping[new_v];};
         auto neigh = [&graph](int col_i){return graph.col_idx[col_i];};
 
-        if (tid == 0) {
         // For each row
-        for (int i = 0; i < len; ++i) {
+        for (int i = tid; i < len; i += blockDim.x) {
             // Retrieve old id of the vertex
             int const old_v1 = mapping[i];
-            // std::cout << "Row with new id: " << i << ", old id: " << old_v1 << "\n";
 
             // Operate on this row
             auto *const row = adjacency_matrix + i * len;
@@ -315,8 +313,8 @@ struct InducedSubgraph {
                 // std::cout << "Incremented adj_idx to " << adj_idx << ", now points to " << old(adj_idx) << "\n";
 
                 if (csr_idx >= csr_idx_end) {
-                        // std::cout << "csr_idx went out of bounds.\n";
-                        goto end_row;
+                    // std::cout << "csr_idx went out of bounds.\n";
+                    goto end_row;
                 }
 
                 while (neigh(csr_idx) < old(adj_idx)) {
@@ -334,7 +332,6 @@ struct InducedSubgraph {
                 row[adj_idx] = neigh(csr_idx) == old(adj_idx);
 end_row:            ;
             }
-        }
         }
     }
 };
