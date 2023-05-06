@@ -428,7 +428,7 @@ __device__ int acquire_next_vertex(Data const& data) {
 // 6        𝑛𝑢𝑚𝐶𝑙𝑖𝑞𝑢𝑒𝑠 + = |𝐼 ′ |
 // 7    else if |𝐼 ′ | > 0
 // 8        𝑡𝑟𝑎𝑣𝑒𝑟𝑠𝑒𝑆𝑢𝑏𝑡𝑟𝑒𝑒 (𝐺, 𝑘, ℓ + 1, 𝐼 ′ )
-__global__ void kernel(Data data, int *count) {
+__global__ void kernel(Data data, unsigned long long *count) {
     int const block_id = blockIdx.x;
     int const thread_id = threadIdx.x;
 
@@ -585,7 +585,7 @@ __global__ void kernel(Data data, int *count) {
     }
 
     for (int i = thread_id; i < data.k; i += blockDim.x) {
-        atomicAdd(&count[i], cliques[i]);
+        atomicAdd(&count[i], (unsigned long long)cliques[i]);
     }
 
     if (thread_id == 0 && debug) {
@@ -632,17 +632,17 @@ static void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, 
         std::cout << graph << "\n";
     }
 
-    auto cliques_cpu = std::make_unique<int[]>(k);
+    auto cliques_cpu = std::make_unique<unsigned long long[]>(k);
 
     { // GPU section
         // input data
         Data data{edges, k};
 
         // output data
-        int *cliques_gpu;
+        unsigned long long *cliques_gpu;
 
-        HANDLE_ERROR(cudaMalloc(&cliques_gpu, k * sizeof(int)));
-        HANDLE_ERROR(cudaMemset(cliques_gpu, 0, k * sizeof(int)));
+        HANDLE_ERROR(cudaMalloc(&cliques_gpu, k * sizeof(*cliques_gpu)));
+        HANDLE_ERROR(cudaMemset(cliques_gpu, 0, k * sizeof(*cliques_gpu)));
 
         cudaEvent_t kernel_run, stop;
         cudaEventCreate(&kernel_run);
@@ -657,7 +657,7 @@ static void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, 
         // Get back the output data
         HANDLE_ERROR(cudaMemcpy(cliques_cpu.get(),
                 cliques_gpu,
-                k * sizeof(int),
+                k * sizeof(*cliques_gpu),
                 cudaMemcpyDeviceToHost)
         );
 
@@ -674,7 +674,11 @@ static void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, 
         cudaEventDestroy(stop);
     }
 
+
     cliques_cpu[0] = max_v + 1;
+    for (int i = 1; i < k; ++i) {
+        cliques_cpu[i] = cliques_cpu[i] % MODULO;
+    }
 
     std::stringstream s;
 
