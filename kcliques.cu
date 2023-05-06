@@ -404,45 +404,6 @@ struct Data {
 
         HANDLE_ERROR(cudaMalloc(&subgraphs, NUM_BLOCKS * sizeof(InducedSubgraph)));
 
-/*         auto tmp_subgraphs = std::make_unique<InducedSubgraph[]>(edges.n);
-        for (int v = 0; v < edges.n; ++v) {
-            auto cpu_subgraph = cpu::InducedSubgraph::extract(edges, v);
-            // if (debug) printf("Filling subgraph with idx %i\n", v);
-            auto& subgraph = tmp_subgraphs[v];
-            subgraph.len = cpu_subgraph.mapping.size();
-            if (cpu_subgraph.mapping.size() > 0) {
-                HANDLE_ERROR(cudaMalloc(&subgraph.mapping, cpu_subgraph.mapping.size() * sizeof(int)));
-                // Get back the output data
-                HANDLE_ERROR(cudaMemcpy(subgraph.mapping,
-                        cpu_subgraph.mapping.data(),
-                        cpu_subgraph.mapping.size() * sizeof(int),
-                        cudaMemcpyHostToDevice)
-                );
-                HANDLE_ERROR(cudaMalloc(&subgraph.adjacency_matrix,
-                                cpu_subgraph.adjacency_matrix.size() * cpu_subgraph.adjacency_matrix[0].size() * sizeof(int)));
-                for (int r = 0; r < cpu_subgraph.adjacency_matrix.size(); ++r) {
-                    // if (debug) printf("cudaMemcpy(dst=%p, src=%p, count=%li)\n",
-                            // subgraph.adjacency_matrix + r * cpu_subgraph.adjacency_matrix[r].size(),
-                            // cpu_subgraph.adjacency_matrix[r].data(),
-                            // cpu_subgraph.adjacency_matrix[r].size()
-                    // );
-                    HANDLE_ERROR(cudaMemcpy(subgraph.adjacency_matrix + r * cpu_subgraph.adjacency_matrix[r].size(),
-                            cpu_subgraph.adjacency_matrix[r].data(),
-                            cpu_subgraph.adjacency_matrix[r].size() * sizeof(int),
-                            cudaMemcpyHostToDevice)
-                    );
-                }
-            } else {
-                subgraph.mapping = nullptr;
-                subgraph.adjacency_matrix = nullptr;
-            }
-        }
-        HANDLE_ERROR(cudaMemcpy(subgraphs,
-                     tmp_subgraphs.get(),
-                     edges.n * sizeof(InducedSubgraph),
-                     cudaMemcpyHostToDevice)
-        ); */
-
         // Initialise stacks
         int const max_entries = k * MAX_DEG;
         for (int i = 0; i < NUM_BLOCKS; ++i) {
