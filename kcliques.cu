@@ -35,9 +35,10 @@ constexpr bool const debug = false;
 
 #define MAX_K 12
 #define MAX_DEG 1024
-#define BLOCK_SIZE 2
-// #define NUM_BLOCKS 64
-#define NUM_BLOCKS 1
+#define BLOCK_SIZE 32
+// #define BLOCK_SIZE 2
+#define NUM_BLOCKS 64
+// #define NUM_BLOCKS 1
 
 namespace cpu { namespace {
 
