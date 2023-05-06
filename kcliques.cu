@@ -581,12 +581,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
     }
 }
 
-using cpu::Edge;
-using cpu::parse_edge;
-using cpu::compute_degs;
-using cpu::orient_graph;
-
-static void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, int k, int max_v) {
+static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_file, int k, int max_v) {
     std::sort(edges.begin(), edges.end());
     if (debug) {
         std::cout << "unoriented sorted edges:\n";
@@ -602,8 +597,8 @@ static void count_cliques(std::vector<Edge>& edges, std::ofstream& output_file, 
         std::cout << unoriented_graph << "\n";
     }
 
-    auto degs = compute_degs(edges, max_v);
-    orient_graph(edges, degs);
+    auto degs = cpu::compute_degs(edges, max_v);
+    cpu::orient_graph(edges, degs);
     std::sort(edges.begin(), edges.end());
 
     if (debug) {
@@ -714,14 +709,14 @@ int main(int argc, char const* argv[]) {
         return EXIT_FAILURE;
     }
 
-    std::vector<Edge> edges;
+    std::vector<cpu::Edge> edges;
     std::string buffer;
 
     int max_v = 0;
     while (input_file.good() && !input_file.eof()) {
         std::getline(input_file, buffer);
         if (!buffer.empty()) {
-            auto const edge = parse_edge(buffer);
+            auto const edge = cpu::parse_edge(buffer);
             max_v = std::max({max_v, edge.first, edge.second});
             edges.push_back(edge);
         }
