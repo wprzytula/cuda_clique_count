@@ -456,7 +456,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
                         int* level_cliques = &cliques[stack.level[current]];
                         *level_cliques = (*level_cliques + 1) % MODULO;
                     }
-                    __syncthreads();
+
                     // Let's explore deeper.
                     if (stack.level[current] + 1 < data.k) { // entry.level + 1 < k
                         bool* new_vertices = stack.vertices + (stack_top + 1) * MAX_DEG;
@@ -473,7 +473,6 @@ __global__ void kernel(Data data, unsigned long long *count) {
                                 stack.done[stack_top] = false;
                             }
                         }
-                        __syncthreads();
                     }
                 }
             }
@@ -488,6 +487,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
                     if (debug) printf("Vertex %i: Finished work over node in entry %i.\n", chosen_vertex, current);
                 }
             }
+
             __syncthreads();
         }
         if (thread_id == 0 && debug) {
