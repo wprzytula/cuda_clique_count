@@ -426,6 +426,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
             if (debug && thread_id == 0) print_subgraph(subgraph);
         }
         InducedSubgraph const& subgraph = data.subgraphs[block_id];
+        int const vs = subgraph.len;
 
         // Initialise first stack frame.
         // stack.emplace(VertexSet::full(subgraphs[v].mapping.size()), k, v, 1);
@@ -448,7 +449,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
                 __syncthreads();
                 continue;
             }
-            for (int v = 0; v < subgraph.len; ++v) {
+            for (int v = 0; v < vs; ++v) {
                 __syncthreads();
                 if (stack.vertices[MAX_DEG * current + v]) { // entry.vertices.contains(v)
                     // We've found a `level`-level clique.
@@ -465,7 +466,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
 
                         __syncthreads();
 
-                        if (vertex_set_nonempty(new_vertices, subgraph.len)) {
+                        if (vertex_set_nonempty(new_vertices, vs)) {
                             // stack.emplace(new_vertices, entry.level + 1);
                             if (thread_id == 0) {
                                 ++stack_top;
