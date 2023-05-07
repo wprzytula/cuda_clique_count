@@ -192,6 +192,7 @@ endif
 
 ALL_CCFLAGS :=
 ALL_CCFLAGS += $(NVCCFLAGS)
+ALL_CCFLAGS += -O3
 ALL_CCFLAGS += $(EXTRA_NVCCFLAGS)
 ALL_CCFLAGS += $(addprefix -Xcompiler ,$(CCFLAGS))
 ALL_CCFLAGS += $(addprefix -Xcompiler ,$(EXTRA_CCFLAGS))
@@ -249,12 +250,9 @@ kcliques.o: kcliques.cu
 
 kcliques: kcliques.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
-#	$(EXEC) mkdir -p ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
-#	$(EXEC) cp $@ ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
 
 clean:
 	rm -f kcliques kcliques.o
-	rm -rf ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)/kcliques
 
 clobber: clean
 
