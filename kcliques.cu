@@ -13,19 +13,6 @@
 #include <unordered_map>
 
 
-// https://stackoverflow.com/a/18968893
-// Prior to the kernel define these helper functions and device variable:
-__device__ volatile int sem = 0;
-
-__device__ void acquire_semaphore(volatile int *lock){
-    while (atomicCAS((int *)lock, 0, 1) != 0);
-}
-
-__device__ void release_semaphore(volatile int *lock){
-    *lock = 0;
-    __threadfence();
-}
-
 #ifdef PRINT
 constexpr bool const debug = true;
 #else
@@ -560,28 +547,6 @@ __global__ void kernel(Data data, unsigned long long *count) {
     }
 
     __syncthreads();
-
-    if (debug) {
-        // https://stackoverflow.com/a/18968893
-        if (thread_id == 0)
-            acquire_semaphore(&sem);
-        __syncthreads();
-        //begin critical section
-        // ... your critical section code goes here
-        if (thread_id == 0) {
-            printf("Block %i: count: [ ", block_id);
-            for (int i = 0; i < data.k; ++i) {
-                printf("%i ", cliques[i]);
-            }
-            printf("]\n");
-        }
-        //end critical section
-        __threadfence(); // not strictly necessary for the lock, but to make any global updates in the critical section visible to other threads in the grid
-        __syncthreads();
-        if (threadIdx.x == 0)
-            release_semaphore(&sem);
-        __syncthreads();
-    }
 
     for (int i = thread_id; i < data.k; i += blockDim.x) {
         atomicAdd(&count[i], (unsigned long long)cliques[i]);
