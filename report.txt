@@ -1,12 +1,11 @@
 Zaimplementowałem algorytm przedstawiony w artykule w następującym wariantach:
 - vertex-centric approach
 - graph orientation approach
-- TODO
 
 Z następującymi optymalizacjami:
 - binary edge encoding
 - induced subgraph extraction
-- TODO
+- induced subgraph sharing (between chosen vertices, for one block)
 
 Na CPU parsuję wejście, sortuję krawędzie i orientuję graf, a także buduję postać CSR. Pomiary wykazały, że ta część algorytmu przy rozsądnie dużych danych ma relatywnie mały wpływ na czas działania, dlatego uznałem że nie ma sensu jej przenosić na GPU.
 
@@ -17,4 +16,15 @@ Na GPU algorytm działa następująco:
 -> zbiory wierzchołków są przecinane masywnie równolegle, a następnie za pomocą `__syncthreads_or()` sprawdzana jest ich niepustość.
 -> każdy blok ma swoje liczniki klik, na koniec działania blok dosumowuje atomowo liczniki do liczników globalnych.
 
-Computing adjacency matrix in parallel (instead of sequentially on one thread per block) yielded speedup from 3.70s to 3.48s on com-dblp sample graph.
+Różne małe optymalizacje:
+	- ekstrakcja sięgnięcia do pamięci globalnej tylko raz na ramkę stosu zamiast |rozmiar podgrafu indukowanego| razy
+	- analiza i eliminacja zbędnych __syncthreads()
+	- computing adjacency matrix in parallel (instead of sequentially on one thread per block) yielded speedup from 3.70s to 3.48s on com-dblp sample graph.
+	- struktura z danymi wejściowymi przekazywana w pamięci __constant__
+	- elementy "administracyjne" stosu w pamięci __shared__
+
+
+Optymalizacja "binary encoding" niestety w moim przypadku podwaja czas działania (ale przynajmniej 64 razy zmniejsza zużycie pamięci na indukowane podgrafy i na ramki stosu). Aby mieć wydajność ocenianą na najszybszej wersji kodu, dostarczam dwie wersje (z binary encoding i z bool encoding).
+
+W związku z tym, dostarczam dwa pliki: kclique.cu i kclique_binary_encoding.cu. Pierwszy kompiluje się za pomocą `make`, drugi `make binary`. Uważam, że lepsze wyniki wydajności osiągnie wersja `klique.cu`, ale w razie możliwości proszę o uruchomienie też testów na wersji `binary`.
+
