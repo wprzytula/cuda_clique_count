@@ -22,9 +22,9 @@
 #define MAX_K 12
 #define MAX_DEG 1024
 #define MODULO 1'000'000'000;
-#define BLOCK_SIZE 128
+#define BLOCK_SIZE 32
 // #define BLOCK_SIZE 2
-#define NUM_BLOCKS 128
+#define NUM_BLOCKS 512
 // #define NUM_BLOCKS 1
 
 namespace cpu { namespace {
@@ -256,13 +256,17 @@ struct Stack {
 };
 
 struct Data {
-    int const k;
+    int k;
     int* next_vertex;
     Stack stacks[NUM_BLOCKS];
     CSR csr;
     InducedSubgraph* subgraphs;
 
-    Data(cpu::CSR const& edges, int const k) : k{k} {
+    // __host__ __device__ Data() : k{0} {} // initialised, for being in __constant__
+
+    // Data(cpu::CSR const& edges, int const k) : k{k} {
+    void init(cpu::CSR const& edges, int const k) {
+        this->k = k;
         csr.vs = edges.n;
 
         csr.row_len = edges.row_ptr.size();
@@ -305,28 +309,9 @@ struct Data {
         HANDLE_ERROR(cudaMalloc(&next_vertex, sizeof(*next_vertex)));
         HANDLE_ERROR(cudaMemset(next_vertex, 0, sizeof(*next_vertex)));
     }
-
-    ~Data() {
-        return; // FIXME: why this results in InvalidArgument error returned?
-        // free graph
-        HANDLE_ERROR(cudaFree(csr.row_ptr));
-        HANDLE_ERROR(cudaFree(csr.col_idx));
-
-        // free subgraphs
-        HANDLE_ERROR(cudaFree(subgraphs));
-
-        // free stacks
-        for (int i = 0; i < NUM_BLOCKS; ++i) {
-            Stack const& stack = stacks[i];
-            HANDLE_ERROR(cudaFree(stack.vertices));
-            HANDLE_ERROR(cudaFree(stack.level));
-            HANDLE_ERROR(cudaFree(stack.done));
-        }
-
-        // free next_vertex
-        HANDLE_ERROR(cudaFree(next_vertex));
-    }
 };
+
+__constant__ Data global_data;
 
 // https://stackoverflow.com/a/3208376
 #define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c"
@@ -432,11 +417,12 @@ __device__ bool vertex_set_contains(unsigned long long const* vertex_set, int co
 // 6        𝑛𝑢𝑚𝐶𝑙𝑖𝑞𝑢𝑒𝑠 + = |𝐼 ′ |
 // 7    else if |𝐼 ′ | > 0
 // 8        𝑡𝑟𝑎𝑣𝑒𝑟𝑠𝑒𝑆𝑢𝑏𝑡𝑟𝑒𝑒 (𝐺, 𝑘, ℓ + 1, 𝐼 ′ )
-__global__ void kernel(Data data, unsigned long long *count) {
+__global__ void kernel(unsigned long long *count) {
     int const block_id = blockIdx.x;
     int const thread_id = threadIdx.x;
 
     int chosen_vertex;
+    Data& data = global_data;
 
     Stack& stack = data.stacks[block_id];
     __shared__ int stack_top;
@@ -591,7 +577,10 @@ static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_f
 
     { // GPU section
         // input data
-        Data data{graph, k};
+        Data data;
+        data.init(graph, k);
+
+        cudaMemcpyToSymbol(global_data, &data, sizeof(Data), 0, cudaMemcpyHostToDevice);
 
         // output data
         unsigned long long *cliques_gpu;
@@ -606,7 +595,7 @@ static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_f
         cudaEventRecord(kernel_run, 0);
 
         // RUN KERNEL, RUN!
-        kernel<<<NUM_BLOCKS, BLOCK_SIZE>>>(data, cliques_gpu);
+        kernel<<<NUM_BLOCKS, BLOCK_SIZE>>>(cliques_gpu);
 
 
         // Get back the output data
