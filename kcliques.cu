@@ -400,7 +400,20 @@ __device__ bool vertex_set_nonempty(unsigned long long const* set, int const vs)
     bool nonempty = 0;
     for (int i = tid; i < len_qwords; i += blockDim.x) {
         // if (debug) printf("Thread %i: nonempty[%i] to %p: %i\n", tid, tid, set + i, i < len ? set[i] : 0);
-        nonempty |= set[i];
+        if (i + 1 == len_qwords) { // if last, we have to only take into account the valid bits.
+
+            // vs % 64
+            // 0 -> 1 1 ... 1 1 1
+            // 1 -> 0 0 ... 0 0 1
+            // 2 -> 0 0 ... 0 1 1
+            // ...
+            // 63 -> 0 1 ... 1 1 1
+
+            unsigned long long const mask = (-1ULL) >> ((64 - vs % 64) % 64);
+            nonempty |= set[i] & mask;
+        } else {
+            nonempty |= set[i];
+        }
     }
 
     bool const any_nonempty = __syncthreads_or(nonempty);
