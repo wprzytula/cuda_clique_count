@@ -1,3 +1,20 @@
+Zaimplementowałem algorytm przedstawiony w artykule w następującym wariantach:
+- vertex-centric approach
+- graph orientation approach
+- TODO
 
+Z następującymi optymalizacjami:
+- binary edge encoding
+- induced subgraph extraction
+- TODO
+
+Na CPU parsuję wejście, sortuję krawędzie i orientuję graf, a także buduję postać CSR. Pomiary wykazały, że ta część algorytmu przy rozsądnie dużych danych ma relatywnie mały wpływ na czas działania, dlatego uznałem że nie ma sensu jej przenosić na GPU.
+
+Na GPU algorytm działa następująco:
+-> jest jeden globalny licznik, którym wierzchołkem teraz należy się zająć. Bloki (w podejściu work-stealing) atomowo go zwiększają, i w ten sposób otrzymują przydział zadań.
+-> pozyskawszy wyróżniony wierzchołek, blok ekstrahuje dla niego indukowany podgraf.
+-> następnie rozpoczyna się przeszukiwanie w głąb z użyciem stosu per blok, zgodnie z opisem w artykule.
+-> zbiory wierzchołków są przecinane masywnie równolegle, a następnie za pomocą `__syncthreads_or()` sprawdzana jest ich niepustość.
+-> każdy blok ma swoje liczniki klik, na koniec działania blok dosumowuje atomowo liczniki do liczników globalnych.
 
 Computing adjacency matrix in parallel (instead of sequentially on one thread per block) yielded speedup from 3.70s to 3.48s on com-dblp sample graph.
