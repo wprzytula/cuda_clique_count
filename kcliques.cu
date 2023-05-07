@@ -50,20 +50,6 @@ namespace cpu { namespace {
         return next_num - 1;
     }
 
-    int find_max_vertex(std::vector<Edge> const& edges) {
-        int max_vertex = 0;
-        for (auto const [v1, v2]: edges) {
-            if (v1 > max_vertex) {
-                max_vertex = v1;
-            }
-            if (v2 > max_vertex) {
-                max_vertex = v2;
-            }
-        }
-        // std::cerr << "Max vertex found: " << max_vertex << std::endl;
-        return max_vertex;
-    }
-
     std::vector<int> compute_degs(std::vector<Edge> const& edges, int max_vertex) {
         std::vector<int> deg;
         deg.resize(max_vertex + 1);
@@ -95,7 +81,7 @@ namespace cpu { namespace {
         int max_v;
         int n;
 
-        CSR(std::vector<Edge> const& edges) : max_v{find_max_vertex(edges)}, n{max_v + 1} {
+        CSR(std::vector<Edge> const& edges, int const max_v) : max_v{max_v}, n{max_v + 1} {
             assert(std::is_sorted(edges.cbegin(), edges.cend()));
 
             col_idx.resize(edges.size());
@@ -578,7 +564,7 @@ static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_f
 
     std::sort(edges.begin(), edges.end());
     if (debug) { // debug
-        cpu::CSR unoriented_graph{edges};
+        cpu::CSR unoriented_graph{edges, max_v};
         std::cout << "unoriented graph:\n";
         std::cout << unoriented_graph << "\n";
     }
@@ -594,7 +580,7 @@ static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_f
         }
     }
 
-    cpu::CSR graph{edges};
+    cpu::CSR graph{edges, max_v};
     if (debug) {
         std::cout << "oriented graph:\n";
         std::cout << graph << "\n";
@@ -604,7 +590,7 @@ static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_f
 
     { // GPU section
         // input data
-        Data data{edges, k};
+        Data data{graph, k};
 
         // output data
         unsigned long long *cliques_gpu;
