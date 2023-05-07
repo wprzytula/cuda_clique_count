@@ -365,51 +365,13 @@ __device__ void intersect_adjacent(InducedSubgraph const& subgraph, bool const* 
 __device__ bool vertex_set_nonempty(bool const* set, int const len) {
     int const tid = threadIdx.x;
 
-    // if (tid == 0 && debug) {
-    //     printf("Reduction!\n");
-    //     printf("set[ ");
-    //     for (int i = 0; i < len; ++i) {
-    //         printf("%p: %i\n", set + i, set[i]);
-    //     }
-    //     printf("]\n");
-    // }
-    // __syncthreads();
-
-    __shared__ bool nonempty[BLOCK_SIZE];
-    nonempty[tid] = 0;
+    bool nonempty = 0;
     for (int i = tid; i < len; i += blockDim.x) {
         // if (debug) printf("Thread %i: nonempty[%i] to %p: %i\n", tid, tid, set + i, i < len ? set[i] : 0);
-        nonempty[tid] |= i < len ? set[i] : 0;
+        nonempty |= i < len ? set[i] : 0;
     }
 
-    // __syncthreads();
-    // if (tid == 0 && debug) {
-    //     printf("nonempty([ ");
-    //     for (int i = 0; i < BLOCK_SIZE && i < len; ++i) {
-    //         printf("%i ", nonempty[i]);
-    //     }
-    //     printf("])\n");
-    // }
-
-    __syncthreads();
-
-    int i = blockDim.x / 2;
-    while (i != 0) {
-        if (tid < i) {
-            // printf("Thread %i: reached reduction step i=%i; [tid]=%i, [tid+i]=%i\n", tid, i, nonempty[tid], nonempty[tid + i]);
-            nonempty[tid] |= nonempty[tid + i];
-        }
-        __syncthreads();
-        i /= 2;
-    }
-    if (tid == 0 && debug) {
-        printf("set_nonempty([ ");
-        for (int i = 0; i < len; ++i) {
-            printf("%i ", set[i]);
-        }
-        printf("]) = %i\n", nonempty[0]);
-    }
-    return nonempty[0];
+    return __syncthreads_or(nonempty);
 }
 
 __device__ int acquire_next_vertex(Data const& data) {
