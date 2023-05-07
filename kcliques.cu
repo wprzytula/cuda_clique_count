@@ -12,11 +12,10 @@
 #include <cassert>
 #include <unordered_map>
 
-
 #ifdef PRINT
-constexpr bool const debug = true;
+#define debug(x) x
 #else
-constexpr bool const debug = false;
+#define debug(x)
 #endif
 
 #define CEIL_DIV(x, y) ((x + y - 1) / y)
@@ -100,6 +99,7 @@ namespace cpu { namespace {
         }
     };
 
+debug(
     std::ostream& operator<<(std::ostream &os, CSR const& csr) {
         os << "Col_idx: [ ";
         for (int col: csr.col_idx) {
@@ -113,7 +113,7 @@ namespace cpu { namespace {
         os << "]\n";
 
         return os;
-    }
+    })
 
     Edge parse_edge(std::string const& buf) {
         char const* ptr = buf.data();
@@ -352,7 +352,7 @@ __device__ void intersect_adjacent(InducedSubgraph const& subgraph, unsigned lon
         auto const* row = subgraph.adjacency_matrix + vertex * subgraph.vs;
 
         for (int i = threadIdx.x; i < subgraph.len_qwords; i += blockDim.x) {
-            if (debug) {
+            debug({
                 printf("Block %i, Thread %i: I'm intersecting %i-th vertex slice: vertex_set[%i]=(%lli), row[%i] = (%llx)\n",
                     blockIdx.x, threadIdx.x, i, i, vertex_set[i], i, row[i]);
                 QWORD_TO_BINARY_HIGHER("Set", vertex_set[i]);
@@ -361,7 +361,7 @@ __device__ void intersect_adjacent(InducedSubgraph const& subgraph, unsigned lon
                         BYTE_TO_BINARY(row[i]>>56), BYTE_TO_BINARY(row[i]>>48), BYTE_TO_BINARY(row[i]>>40), BYTE_TO_BINARY(row[i]>>32));
                 printf("Row: Bytes 3, 2, 1, 0: " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN "\n",
                         BYTE_TO_BINARY(row[i]>>24), BYTE_TO_BINARY(row[i]>>16), BYTE_TO_BINARY(row[i]>>8), BYTE_TO_BINARY(row[i]));
-            }
+            });
             out_vertex_set[i] = vertex_set[i] & row[i]; // set each vertex as in or out of set
         }
     }
@@ -372,7 +372,6 @@ __device__ bool vertex_set_nonempty(unsigned long long const* set, int const vs)
 
     bool nonempty = 0;
     for (int i = tid; i < len_qwords; i += blockDim.x) {
-        // if (debug) printf("Thread %i: nonempty[%i] to %p: %i\n", tid, tid, set + i, i < len ? set[i] : 0);
         if (i + 1 == len_qwords) { // if last, we have to only take into account the valid bits.
 
             // vs % 64
@@ -391,13 +390,15 @@ __device__ bool vertex_set_nonempty(unsigned long long const* set, int const vs)
 
     bool const any_nonempty = __syncthreads_or(nonempty);
 
-    if (tid == 0 && debug) {
-        printf("set_nonempty([ ");
-        for (int i = 0; i < vs; ++i) {
-            printf("%lli ", set[i / 64] & (1ULL << i % 64));
+    debug(
+        if (tid == 0) {
+            printf("set_nonempty([ ");
+            for (int i = 0; i < vs; ++i) {
+                printf("%lli ", set[i / 64] & (1ULL << i % 64));
+            }
+            printf("]) = %i\n", nonempty);
         }
-        printf("]) = %i\n", nonempty);
-    }
+    )
 
     return any_nonempty;
 }
@@ -440,7 +441,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
     Stack& stack = data.stacks[block_id];
     __shared__ int stack_top;
 
-    if (debug && block_id == 0 && thread_id == 0) printf("\n\n----- RUNNING KERNEL!!! ------\n\n");
+    debug(if (block_id == 0 && thread_id == 0) printf("\n\n----- RUNNING KERNEL!!! ------\n\n"));
 
     __shared__ int cliques[MAX_K];
     // Set counters to zeros.
@@ -451,15 +452,15 @@ __global__ void kernel(Data data, unsigned long long *count) {
     __syncthreads();
 
     while ((chosen_vertex = acquire_next_vertex(data)) < data.csr.vs) {
-        if (debug && thread_id == 0) {
+        debug (if (thread_id == 0) {
             printf("Block %i has acquired vertex %i\n", block_id, chosen_vertex);
-        }
+        })
 
         // Compute InducedSubgraph
         {
             InducedSubgraph& subgraph = data.subgraphs[block_id];
             subgraph.extract(data.csr, chosen_vertex);
-            if (debug && thread_id == 0) print_subgraph(subgraph);
+            debug(if (thread_id == 0) print_subgraph(subgraph));
         }
         InducedSubgraph const& subgraph = data.subgraphs[block_id];
         int const vs = subgraph.vs;
@@ -475,10 +476,10 @@ __global__ void kernel(Data data, unsigned long long *count) {
         while (stack_top >= 0) {
             __syncthreads();
             int const current = stack_top;
-            if (debug && thread_id == 0) {
+            debug(if (thread_id == 0) {
                 printf("Block %i vertex %i operating on stack entry with idx %i, done? %i\n",
                         block_id, chosen_vertex, current, stack.done[current]);
-            }
+            })
             if (stack.done[current]) {
                 if (thread_id == 0)
                     --stack_top;
@@ -497,7 +498,7 @@ __global__ void kernel(Data data, unsigned long long *count) {
                     // Let's explore deeper.
                     if (stack.level[current] + 1 < data.k) { // entry.level + 1 < k
                         unsigned long long* new_vertices = stack.vertices + (stack_top + 1) * MAX_DEG / 64;
-                        if (thread_id == 0 && debug) printf("Block %i, Vertex %i: Intersecting with subgraph's vertex %i.\n", block_id, chosen_vertex, v);
+                        debug(if (thread_id == 0) printf("Block %i, Vertex %i: Intersecting with subgraph's vertex %i.\n", block_id, chosen_vertex, v));
                         intersect_adjacent(subgraph, stack.vertices + current * MAX_DEG / 64, v, new_vertices);
 
                         __syncthreads();
@@ -518,18 +519,18 @@ __global__ void kernel(Data data, unsigned long long *count) {
             if (thread_id == 0) {
                 stack.done[current] = true;
                 if (current == stack_top) /*leaf reached, go back*/{
-                    if (debug) printf("Vertex %i: Reached leaf in entry %i.\n", chosen_vertex, current);
+                    debug(printf("Vertex %i: Reached leaf in entry %i.\n", chosen_vertex, current));
                     --stack_top;
                 } else {
-                    if (debug) printf("Vertex %i: Finished work over node in entry %i.\n", chosen_vertex, current);
+                    debug(printf("Vertex %i: Finished work over node in entry %i.\n", chosen_vertex, current));
                 }
             }
 
             __syncthreads();
         }
-        if (thread_id == 0 && debug) {
+        debug(if (thread_id == 0) {
             printf("Block %i, Vertex %i: Finished stack iteration.\n", block_id, chosen_vertex);
-        }
+        });
     }
 
     __syncthreads();
@@ -538,53 +539,53 @@ __global__ void kernel(Data data, unsigned long long *count) {
         atomicAdd(&count[i], (unsigned long long)cliques[i]);
     }
 
-    if (thread_id == 0 && debug) {
+    debug(if (thread_id == 0) {
         __syncthreads();
         printf("Block %i, Finished!\n", block_id);
-    }
+    });
 }
 
 static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_file, int k) {
-    if (debug) {
+    debug({
         std::cout << "unoriented sorted edges before making vertices consecutive:\n";
         for (auto const [v1, v2]: edges) {
             std::cout << "(" << v1 << ", " << v2 << ")\n";
         }
-    }
+    })
 
     int const max_v = cpu::make_vertices_consecutive_natural_numbers(edges);
 
-    if (debug) {
+    debug({
         std::cout << "unoriented sorted edges with vertices made consecutive:\n";
         for (auto const [v1, v2]: edges) {
             std::cout << "(" << v1 << ", " << v2 << ")\n";
         }
         std::cout << "max_v=" << max_v << ")\n";
-    }
+    });
 
     std::sort(edges.begin(), edges.end());
-    if (debug) { // debug
-        cpu::CSR unoriented_graph{edges, max_v};
+    debug({
+        cpu::CSR unoriented_graph(edges, max_v);
         std::cout << "unoriented graph:\n";
         std::cout << unoriented_graph << "\n";
-    }
+    });
 
     auto degs = cpu::compute_degs(edges, max_v);
     cpu::orient_graph(edges, degs);
     std::sort(edges.begin(), edges.end());
 
-    if (debug) {
+    debug({
         std::cout << "oriented sorted edges:\n";
         for (auto const [v1, v2]: edges) {
             std::cout << "(" << v1 << ", " << v2 << ")\n";
         }
-    }
+    });
 
     cpu::CSR graph{edges, max_v};
-    if (debug) {
+    debug({
         std::cout << "oriented graph:\n";
         std::cout << graph << "\n";
-    }
+    });
 
     auto cliques_cpu = std::make_unique<unsigned long long[]>(k);
 
