@@ -6,16 +6,18 @@ Z następującymi optymalizacjami:
 - binary edge encoding
 - induced subgraph extraction
 - induced subgraph sharing (between chosen vertices, for one block)
+- hierarchical parallelism
 
 Na CPU parsuję wejście, sortuję krawędzie i orientuję graf, a także buduję postać CSR. Pomiary wykazały, że ta część algorytmu przy rozsądnie dużych danych ma relatywnie mały wpływ na czas działania, dlatego uznałem że nie ma sensu jej przenosić na GPU.
 
 Na GPU algorytm działa następująco:
 -> jest jeden globalny licznik, którym wierzchołkem teraz należy się zająć. Bloki (w podejściu work-stealing) atomowo go zwiększają, i w ten sposób otrzymują przydział zadań.
 -> pozyskawszy wyróżniony wierzchołek, blok ekstrahuje dla niego indukowany podgraf.
--> następnie rozpoczyna się przeszukiwanie w głąb z użyciem stosu per blok, zgodnie z opisem w artykule.
--> zbiory wierzchołków są przecinane masywnie równolegle, a następnie za pomocą `__syncthreads_or()` sprawdzana jest ich niepustość.
--> każdy blok ma swoje liczniki klik, na koniec działania blok dosumowuje atomowo liczniki do liczników globalnych.
-
+-> następnie na poziomie 1 warp 0 przegląda wszystkie dzieci w drzewie przeszukiwania i przydziela je warpom w bloku wg round-robin.
+-> następnie rozpoczyna się przeszukiwanie w głąb z użyciem stosu per warp, zgodnie z opisem w artykule.
+-> zbiory wierzchołków są przecinane masywnie równolegle, a następnie sprawdzana jest ich niepustość.
+-> każdy warp ma swoje liczniki klik, na koniec działania warpy nie-0 dosumowują się do warpa 0, a potem warp 0 dosumowuje atomowo liczniki do liczników globalnych.
+ 
 Różne małe optymalizacje:
 	- ekstrakcja sięgnięcia do pamięci globalnej tylko raz na ramkę stosu zamiast |rozmiar podgrafu indukowanego| razy
 	- analiza i eliminacja zbędnych __syncthreads()
@@ -23,8 +25,16 @@ Różne małe optymalizacje:
 	- struktura z danymi wejściowymi przekazywana w pamięci __constant__
 	- elementy "administracyjne" stosu w pamięci __shared__
 
+W ostatniej znalazłem `__syncwarp()`, które umożliwiło mi zmianę paradygmatu na hierarchical parallelism (3 poziomy zamiast 2, z użyciem niezależnych warpów przeszukujących każdy własne poddrzewo). Dało mi to kilkukrotne przyśpieszenie. Na wypadek, gdyby ta zmiana coś psuła, załączam też poprzednią wersję.
 
-Optymalizacja "binary encoding" niestety w moim przypadku podwaja czas działania (ale przynajmniej 64 razy zmniejsza zużycie pamięci na indukowane podgrafy i na ramki stosu). Aby mieć wydajność ocenianą na najszybszej wersji kodu, dostarczam dwie wersje (z binary encoding i z bool encoding).
+Optymalizacja "binary encoding" niestety w moim przypadku podwaja czas działania (ale przynajmniej 64 razy zmniejsza zużycie pamięci na indukowane podgrafy i na ramki stosu). Aby mieć wydajność ocenianą na najszybszej wersji kodu, dostarczam obydwie wersje (z binary encoding i z bool encoding).
 
-W związku z tym, dostarczam dwa pliki: kclique.cu i kclique_binary_encoding.cu. Pierwszy kompiluje się za pomocą `make`, drugi `make binary`. Uważam, że lepsze wyniki wydajności osiągnie wersja `klique.cu`, ale w razie możliwości proszę o uruchomienie też testów na wersji `binary`.
+W związku z tym, dostarczam cztery pliki: 
+- kclique.cu,
+- kclique_binary_.cu,
+- kclique_nowarps.cu,
+- kclique_nowarp_binary.cu.
+Pierwszy kompiluje się za pomocą `make`, drugi `make binary`, trzeci `make nowarp`, czwarty `make nowarp_binary`. Uważam, że najlepsze wyniki wydajności osiągnie wersja `klique.cu`, ale w razie możliwości (lub błędów) proszę o uruchomienie też pozostałych wersji.
+
+Myślę, że diffy między nimi ładnie też obrazują rozwój tego kodu.
 
