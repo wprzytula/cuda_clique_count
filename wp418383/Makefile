@@ -34,7 +34,7 @@
 ################################################################################
 
 # Location of the CUDA Toolkit
-CUDA_PATH ?= "/usr/local/cuda-12.0"
+CUDA_PATH ?= "/usr/local/cuda"
 
 ##############################
 # start deprecated interface #
@@ -193,6 +193,7 @@ endif
 ALL_CCFLAGS :=
 ALL_CCFLAGS += $(NVCCFLAGS)
 ALL_CCFLAGS += -O3
+ALL_CCFLAGS += -std=c++17
 ALL_CCFLAGS += $(EXTRA_NVCCFLAGS)
 ALL_CCFLAGS += $(addprefix -Xcompiler ,$(CCFLAGS))
 ALL_CCFLAGS += $(addprefix -Xcompiler ,$(EXTRA_CCFLAGS))
