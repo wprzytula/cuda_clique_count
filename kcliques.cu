@@ -22,10 +22,15 @@
 #define MAX_K 12
 #define MAX_DEG 1024
 #define MODULO 1'000'000'000;
-#define BLOCK_SIZE 32
-// #define BLOCK_SIZE 2
-#define NUM_BLOCKS 512
+
+#define BLOCK_SIZE 128
+// #define BLOCK_SIZE 32
+#define NUM_BLOCKS 128
 // #define NUM_BLOCKS 1
+
+#define WARP_SIZE 32
+#define WARPS_PER_BLOCK (BLOCK_SIZE / WARP_SIZE)
+#define NUM_WARPS (NUM_BLOCKS * WARPS_PER_BLOCK)
 
 namespace cpu { namespace {
     using Edge = std::pair<int, int>;
@@ -258,7 +263,7 @@ struct Stack {
 struct Data {
     int k;
     int* next_vertex;
-    Stack stacks[NUM_BLOCKS];
+    Stack stacks[NUM_WARPS];
     CSR csr;
     InducedSubgraph* subgraphs;
 
@@ -291,8 +296,8 @@ struct Data {
 
         int const storage_units_per_vertex_set = MAX_DEG / 64;
         // Initialise stacks
-        int const max_entries = k * MAX_DEG;
-        for (int i = 0; i < NUM_BLOCKS; ++i) {
+        int const max_entries = k * MAX_DEG / WARPS_PER_BLOCK;
+        for (int i = 0; i < NUM_WARPS; ++i) {
             Stack& stack = stacks[i];
             stack.vertices = nullptr;
             HANDLE_ERROR(cudaMalloc(&stack.vertices, max_entries * storage_units_per_vertex_set * sizeof(*stack.vertices)));
@@ -332,58 +337,78 @@ printf(name ": Bytes 3, 2, 1, 0: " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PAT
     BYTE_TO_BINARY(qword>>24), BYTE_TO_BINARY(qword>>16), BYTE_TO_BINARY(qword>>8), BYTE_TO_BINARY(qword));
 
 __device__ void intersect_adjacent(InducedSubgraph const& subgraph, unsigned long long const* vertex_set, int vertex, unsigned long long* out_vertex_set) {
-        auto const* row = subgraph.adjacency_matrix + vertex * subgraph.vs;
+    auto const* row = subgraph.adjacency_matrix + vertex * subgraph.vs;
 
-        for (int i = threadIdx.x; i < subgraph.len_qwords; i += blockDim.x) {
-            debug({
-                printf("Block %i, Thread %i: I'm intersecting %i-th vertex slice: vertex_set[%i]=(%lli), row[%i] = (%llx)\n",
-                    blockIdx.x, threadIdx.x, i, i, vertex_set[i], i, row[i]);
-                QWORD_TO_BINARY_HIGHER("Set", vertex_set[i]);
-                QWORD_TO_BINARY_LOWER("Set", vertex_set[i]);
-                printf("Row: Bytes 7, 6, 5, 4: " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN "\n",
-                        BYTE_TO_BINARY(row[i]>>56), BYTE_TO_BINARY(row[i]>>48), BYTE_TO_BINARY(row[i]>>40), BYTE_TO_BINARY(row[i]>>32));
-                printf("Row: Bytes 3, 2, 1, 0: " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN "\n",
-                        BYTE_TO_BINARY(row[i]>>24), BYTE_TO_BINARY(row[i]>>16), BYTE_TO_BINARY(row[i]>>8), BYTE_TO_BINARY(row[i]));
-            });
-            out_vertex_set[i] = vertex_set[i] & row[i]; // set each vertex as in or out of set
-        }
+    for (int i = threadIdx.x % WARP_SIZE; i < subgraph.len_qwords; i += WARP_SIZE) {
+        debug({
+            printf("Block %i, Thread %i: I'm intersecting %i-th vertex slice: vertex_set[%i]=(%lli), row[%i] = (%llx)\n",
+                blockIdx.x, threadIdx.x, i, i, vertex_set[i], i, row[i]);
+            QWORD_TO_BINARY_HIGHER("Set", vertex_set[i]);
+            QWORD_TO_BINARY_LOWER("Set", vertex_set[i]);
+            QWORD_TO_BINARY_HIGHER("Row", row[i]);
+            QWORD_TO_BINARY_LOWER("Row", row[i]);
+        });
+        out_vertex_set[i] = vertex_set[i] & row[i]; // set each vertex as in or out of set
     }
+}
+
+__device__ void copy_adjacent(InducedSubgraph const& subgraph, int vertex, unsigned long long* out_vertex_set) {
+    auto const* row = subgraph.adjacency_matrix + vertex * subgraph.vs;
+
+    for (int i = threadIdx.x; i < subgraph.len_qwords; i += WARP_SIZE) {
+        debug({
+            printf("Block %i, Thread %i: I'm copying %i-th vertex slice: row[%i] = (%llx)\n",
+                blockIdx.x, threadIdx.x, i, i, row[i]);
+            QWORD_TO_BINARY_HIGHER("Row", row[i]);
+            QWORD_TO_BINARY_LOWER("Row", row[i]);
+        });
+        out_vertex_set[i] = row[i]; // set each vertex as in or out of row
+    }
+}
 
 __device__ bool vertex_set_nonempty(unsigned long long const* set, int const vs) {
-    int const tid = threadIdx.x;
+    int const tid = threadIdx.x % WARP_SIZE;
+    int const warp_id = threadIdx.x / WARP_SIZE;
+
     int const len_qwords = CEIL_DIV(vs, 64);
 
-    bool nonempty = 0;
-    for (int i = tid; i < len_qwords; i += blockDim.x) {
-        if (i + 1 == len_qwords) { // if last, we have to only take into account the valid bits.
+    __shared__ bool nonempty[WARPS_PER_BLOCK];
 
-            // vs % 64
-            // 0 -> 1 1 ... 1 1 1
-            // 1 -> 0 0 ... 0 0 1
-            // 2 -> 0 0 ... 0 1 1
-            // ...
-            // 63 -> 0 1 ... 1 1 1
+    // for (int i = tid; i < len_qwords; i += WARP_SIZE) {
+    //     if (i + 1 == len_qwords) { // if last, we have to only take into account the valid bits.
 
-            unsigned long long const mask = (-1ULL) >> ((64 - vs % 64) % 64);
-            nonempty |= set[i] & mask;
-        } else {
-            nonempty |= set[i];
+    //         // vs % 64
+    //         // 0 -> 1 1 ... 1 1 1
+    //         // 1 -> 0 0 ... 0 0 1
+    //         // 2 -> 0 0 ... 0 1 1
+    //         // ...
+    //         // 63 -> 0 1 ... 1 1 1
+
+    //         unsigned long long const mask = (-1ULL) >> ((64 - vs % 64) % 64);
+    //         nonempty |= set[i] & mask;
+    //     } else {
+    //         nonempty |= set[i];
+    //     }
+    // }
+
+    if (tid == 0) {
+        for (int i = 0; i < len_qwords; ++i) {
+            nonempty[warp_id] |= set[i];
         }
     }
-
-    bool const any_nonempty = __syncthreads_or(nonempty);
+    __syncwarp();
 
     debug(
         if (tid == 0) {
             printf("set_nonempty([ ");
             for (int i = 0; i < vs; ++i) {
-                printf("%lli ", set[i / 64] & (1ULL << i % 64));
+                printf("%i ", !!(set[i / 64] & (1ULL << i % 64)));
             }
-            printf("]) = %i\n", nonempty);
+            printf("]) = %i\n", nonempty[warp_id]);
         }
     )
 
-    return any_nonempty;
+    return nonempty[warp_id];
 }
 
 __device__ int acquire_next_vertex(Data const& data) {
@@ -417,27 +442,30 @@ __device__ bool vertex_set_contains(unsigned long long const* vertex_set, int co
 // 8        𝑡𝑟𝑎𝑣𝑒𝑟𝑠𝑒𝑆𝑢𝑏𝑡𝑟𝑒𝑒 (𝐺, 𝑘, ℓ + 1, 𝐼 ′ )
 __global__ void kernel(unsigned long long *count) {
     int const block_id = blockIdx.x;
-    int const thread_id = threadIdx.x;
+    int const thread_id = threadIdx.x % WARP_SIZE;
+    int const warp_id = threadIdx.x / WARP_SIZE;
+    int const unique_warp_id = block_id * WARPS_PER_BLOCK + warp_id;
 
     int chosen_vertex;
     Data& data = global_data;
     int const all_vs = data.csr.vs;
 
-    Stack& stack = data.stacks[block_id];
-    __shared__ int stack_top;
+    Stack& stack = data.stacks[unique_warp_id];
+    __shared__ int stack_tops[WARPS_PER_BLOCK];
+    int& stack_top = stack_tops[warp_id];
 
-    debug(if (block_id == 0 && thread_id == 0) printf("\n\n----- RUNNING KERNEL!!! ------\n\n"));
+    debug(if (block_id == 0 && warp_id == 0 && thread_id == 0) printf("\n\n----- RUNNING KERNEL!!! ------\n\n"));
 
-    __shared__ int cliques[MAX_K];
+    __shared__ int cliques[WARPS_PER_BLOCK][MAX_K];
     // Set counters to zeros.
-    for (int i = thread_id; i < data.k; i += blockDim.x) {
-        cliques[i] = 0;
+    if (thread_id < MAX_K) {
+        cliques[warp_id][thread_id] = 0;
     }
 
     __syncthreads();
 
     while ((chosen_vertex = acquire_next_vertex(data)) < all_vs) {
-        debug (if (thread_id == 0) {
+        debug(if (thread_id == 0 && warp_id == 0) {
             printf("\n ACQUISITION: Block %i has acquired vertex %i\n", block_id, chosen_vertex);
         })
 
@@ -445,48 +473,101 @@ __global__ void kernel(unsigned long long *count) {
         {
             InducedSubgraph& subgraph = data.subgraphs[block_id];
             subgraph.extract(data.csr, chosen_vertex);
-            debug(if (thread_id == 0) print_subgraph(subgraph));
+            debug(if (thread_id == 0 && warp_id == 0) print_subgraph(subgraph));
         }
         InducedSubgraph const& subgraph = data.subgraphs[block_id];
         int const vs = subgraph.vs;
 
-        // Initialise first stack frame.
-        // stack.emplace(VertexSet::full(subgraphs[v].mapping.size()), k, v, 1);
+        // Initialise empty stack.
         if (thread_id == 0) {
-            stack_top = 0;
-            stack.level[0] = 1;
-            stack.done[0] = false;
+            stack_top = -1;
         }
+
+        // First level
         __syncthreads();
+        if (warp_id == 0) {
+            // We've found a number=vs level 1 cliques.
+            if (thread_id == 0) {
+                debug(printf("Block %i vertex %i: found %i of 2-cliques.\n",
+                             block_id, chosen_vertex, vs);
+                );
+                int* level_cliques = &cliques[0/*warp id*/][1 /*level*/];
+                *level_cliques = (*level_cliques + vs) % MODULO;
+            }
+            if (2 < data.k) { // entry.level + 1 < k
+                for (int v = 0; v < vs; ++v) {
+                    int const assigned_warp = v % WARPS_PER_BLOCK;
+                    int const unique_assigned_warp = block_id * WARPS_PER_BLOCK + assigned_warp;
+                    int& assigned_stack_top = stack_tops[assigned_warp];
+                    Stack& assigned_stack = data.stacks[unique_assigned_warp];
+                    debug(if (thread_id == 0) printf("Block %i, Vertex %i, Assigned subgraph's vertex %i to warp %i.\n",
+                                                        block_id, chosen_vertex, v, assigned_warp)
+                    );
+                    __syncwarp();
+
+                    unsigned long long* new_vertices = assigned_stack.vertices + (assigned_stack_top + 1) * MAX_DEG / 64;
+                    debug(if (thread_id == 0) printf("Block %i, Vertex %i, Warp %i: Copying subgraph's vertex %i.\n",
+                                                        block_id, chosen_vertex, warp_id, v)
+                    );
+                    copy_adjacent(subgraph, v, new_vertices);
+
+                    __syncwarp();
+
+                    if (vertex_set_nonempty(new_vertices, vs)) {
+                        // stack.emplace(new_vertices, entry.level + 1);
+                        if (thread_id == 0) {
+                            ++assigned_stack_top;
+                            assigned_stack.level[assigned_stack_top] = 2;
+                            assigned_stack.done[assigned_stack_top] = false;
+                        }
+                    }
+                    __syncwarp();
+                }
+            }
+        }
+
+        __syncthreads();
+        // Per-warp iteration
+        debug(if (warp_id == 0 && thread_id == 0)
+            printf("\n BEGINNING PER_WARP iteration: block %i, vertex %i.\n\n", block_id, chosen_vertex)
+        );
+
         while (stack_top >= 0) {
-            __syncthreads();
+            __syncwarp();
             int const current = stack_top;
+            debug(if (thread_id == 0) printf("Warp %i: Stack top: %i\n", warp_id, current));
             debug(if (thread_id == 0) {
-                printf("Block %i vertex %i operating on stack entry with idx %i, done? %i\n",
-                        block_id, chosen_vertex, current, stack.done[current]);
+                printf("Block %i warp %i vertex %i operating on stack entry with idx %i, done? %i\n",
+                        block_id, warp_id, chosen_vertex, current, stack.done[current]);
             })
             if (stack.done[current]) {
                 if (thread_id == 0)
                     --stack_top;
-                __syncthreads();
+                __syncwarp();
                 continue;
             }
             for (int v = 0; v < vs; ++v) {
-                __syncthreads();
+                __syncwarp();
                 if (vertex_set_contains(stack.vertices, current, v)) { // entry.vertices.contains(v)
                     // We've found a `level`-level clique.
                     if (thread_id == 0) {
-                        int* level_cliques = &cliques[stack.level[current]];
+                        int* level_cliques = &cliques[warp_id][stack.level[current]];
                         *level_cliques = (*level_cliques + 1) % MODULO;
+                        debug(
+                            printf("Block %i, warp %i, vertex %i: found a %i-clique. Cliques now: %i\n",
+                                      block_id, warp_id, chosen_vertex, stack.level[current] + 1, *level_cliques)
+                        );
                     }
 
                     // Let's explore deeper.
                     if (stack.level[current] + 1 < data.k) { // entry.level + 1 < k
                         unsigned long long* new_vertices = stack.vertices + (stack_top + 1) * MAX_DEG / 64;
-                        debug(if (thread_id == 0) printf("Block %i, Vertex %i: Intersecting with subgraph's vertex %i.\n", block_id, chosen_vertex, v));
+                        debug(if (thread_id == 0) printf("Block %i, Vertex %i, Warp %i: Intersecting with subgraph's vertex %i.\n",
+                                                         block_id, chosen_vertex, warp_id, v)
+                        );
                         intersect_adjacent(subgraph, stack.vertices + current * MAX_DEG / 64, v, new_vertices);
 
-                        __syncthreads();
+                        __syncwarp();
 
                         if (vertex_set_nonempty(new_vertices, vs)) {
                             // stack.emplace(new_vertices, entry.level + 1);
@@ -499,35 +580,50 @@ __global__ void kernel(unsigned long long *count) {
                     }
                 }
             }
-            __syncthreads();
+            __syncwarp();
 
             if (thread_id == 0) {
                 stack.done[current] = true;
                 if (current == stack_top) /*leaf reached, go back*/{
-                    debug(printf("Vertex %i: Reached leaf in entry %i.\n", chosen_vertex, current));
+                    debug(printf("Vertex %i warp %i: Reached leaf in entry %i.\n", chosen_vertex, warp_id, current));
                     --stack_top;
                 } else {
-                    debug(printf("Vertex %i: Finished work over node in entry %i.\n", chosen_vertex, current));
+                    debug(printf("Vertex %i warp %i: Finished work over node in entry %i.\n", chosen_vertex, warp_id, current));
                 }
             }
 
-            __syncthreads();
+            __syncwarp();
         }
         debug(if (thread_id == 0) {
-            printf("Block %i, Vertex %i: Finished stack iteration.\n", block_id, chosen_vertex);
+            printf("Block %i, Vertex %i, warp %i: Finished stack iteration.\n", block_id, chosen_vertex, warp_id);
         });
     }
 
     __syncthreads();
 
-    for (int i = thread_id; i < data.k; i += blockDim.x) {
-        atomicAdd(&count[i], (unsigned long long)cliques[i]);
-    }
+    // if (thread_id == 0) { // DEBUG@@@R#@@#@T@@$T$@T@
+    //     debug(printf("block %i warp %i: 2-Cliques num=%i\n", block_id, warp_id, cliques[0][1]));
+    // }
 
-    debug(if (thread_id == 0) {
+    // if (warp_id != 0) {
+    //     if (thread_id < data.k) {
+    //         atomicAdd_block(&cliques[0][thread_id], cliques[warp_id][thread_id]);
+    //     }
+    // }
+
+    __syncthreads();
+
+    if (thread_id < data.k) {
+        atomicAdd(&count[thread_id], (unsigned long long)cliques[warp_id][thread_id]);
+    }
+    // for (int i = thread_id; i < data.k; i += blockDim.x) {
+    //     atomicAdd(&count[i], (unsigned long long)cliques[warp_id][i]);
+    // }
+
+    debug(
         __syncthreads();
-        printf("Block %i, Finished!\n", block_id);
-    });
+        if (thread_id == 0 && warp_id == 0) printf("Block %i, Finished!\n", block_id);
+    );
 }
 
 static void count_cliques(std::vector<cpu::Edge>& edges, std::ofstream& output_file, int k) {
