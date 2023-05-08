@@ -421,6 +421,7 @@ __global__ void kernel(unsigned long long *count) {
 
     int chosen_vertex;
     Data& data = global_data;
+    int const all_vs = data.csr.vs;
 
     Stack& stack = data.stacks[block_id];
     __shared__ int stack_top;
@@ -435,7 +436,7 @@ __global__ void kernel(unsigned long long *count) {
 
     __syncthreads();
 
-    while ((chosen_vertex = acquire_next_vertex(data)) < data.csr.vs) {
+    while ((chosen_vertex = acquire_next_vertex(data)) < all_vs) {
         debug (if (thread_id == 0) {
             printf("\n ACQUISITION: Block %i has acquired vertex %i\n", block_id, chosen_vertex);
         })
