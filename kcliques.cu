@@ -18,7 +18,6 @@
 #define debug(x)
 #endif
 
-#define CEIL_DIV(x, y) ((x + y - 1) / y)
 #define MAX_K 12
 #define MAX_DEG 1024
 #define MODULO 1'000'000'000;
@@ -152,10 +151,9 @@ struct CSR {
 };
 
 struct InducedSubgraph {
-    int len_qwords;
-    int vs;
-    int mapping[MAX_DEG];
-    unsigned long long adjacency_matrix[MAX_DEG * MAX_DEG / 64];
+    int len;
+    int mapping[MAX_DEG]; // len
+    int adjacency_matrix[MAX_DEG * MAX_DEG]; // len * len
 
     __device__ void extract(CSR const& graph, int const v) {
         int const tid = threadIdx.x;
@@ -163,8 +161,7 @@ struct InducedSubgraph {
         int const end = graph.row_ptr[v + 1];
 
         if (tid == 0) {
-            vs = end - start;
-            len_qwords = CEIL_DIV(vs, 64);
+            len = end - start;
         }
         __syncthreads();
 
@@ -184,23 +181,23 @@ struct InducedSubgraph {
         auto neigh = [&graph](int col_i){return graph.col_idx[col_i];};
 
         // For each row
-        for (int i = tid; i < vs; i += blockDim.x) {
+        for (int i = tid; i < len; i += blockDim.x) {
             // Retrieve old id of the vertex
             int const old_v1 = mapping[i];
 
             // Operate on this row
-            auto *const row = adjacency_matrix + i * vs;
+            auto *const row = adjacency_matrix + i * len;
 
             // Clear the row after previous subgraph (zeros are assumed in the algorithm)
-            for (int j = 0; j < len_qwords; ++j) {
-                row[j] = 0;
+            for (int j = tid; j < len; j += blockDim.x) {
+                row[j] = false;
             }
 
             int csr_idx = graph.row_ptr[old_v1];
             int const csr_idx_end = graph.row_ptr[old_v1 + 1];
 
             // For each cell in this row
-            for (int adj_idx = 0; adj_idx < vs; ++adj_idx) {
+            for (int adj_idx = 0; adj_idx < len; ++adj_idx) {
                 // std::cout << "Incremented adj_idx to " << adj_idx << ", now points to " << old(adj_idx) << "\n";
 
                 if (csr_idx >= csr_idx_end) {
@@ -220,7 +217,7 @@ struct InducedSubgraph {
 
                 // printf("Deciding edge between %d and %d based on value in csr_idx under %d: %d\n",
                 //      old_v1, old(adj_idx), csr_idx, neigh(csr_idx));
-                row[adj_idx / 64] |= ((unsigned long long)(neigh(csr_idx) == old(adj_idx))) << (adj_idx % 64);
+                row[adj_idx] = neigh(csr_idx) == old(adj_idx);
 end_row:            ;
             }
         }
@@ -229,22 +226,22 @@ end_row:            ;
 
 __device__ void print_subgraph(InducedSubgraph const& subgraph) {
         printf("Subgraph mapping: [ ");
-        for (int i = 0; i < subgraph.vs; ++i) {
+        for (int i = 0; i < subgraph.len; ++i) {
             int const old_v = subgraph.mapping[i];
             printf("%i ", old_v);
         }
         printf("]\n");
         printf("Adjacency matrix:\n");
         printf("  ");
-        for (int i = 0; i < subgraph.vs; ++i) {
+        for (int i = 0; i < subgraph.len; ++i) {
             int const old_v = subgraph.mapping[i];
             printf("%i ", old_v);
         }
         printf("\n");
-        for (int i = 0; i < subgraph.vs; ++i) {
+        for (int i = 0; i < subgraph.len; ++i) {
             printf("[");
-            for (int j = 0; j < subgraph.vs; ++j) {
-                bool exists = subgraph.adjacency_matrix[i * subgraph.vs + j / 64] & (1ULL << j % 64);
+            for (int j = 0; j < subgraph.len; ++j) {
+                bool exists = subgraph.adjacency_matrix[i * subgraph.len + j];
                 printf(" %c", exists ? 'x' : ' ');
             }
             printf(" ]\n");
@@ -253,7 +250,7 @@ __device__ void print_subgraph(InducedSubgraph const& subgraph) {
 
 struct Stack {
     // VertexSet
-    unsigned long long *vertices; // 2-level array [[true, true, false], [false, false, false]]
+    bool *vertices; // 2-level array [[true, true, false], [false, false, false]]
 
     bool* done;
 
@@ -294,14 +291,13 @@ struct Data {
         subgraphs = nullptr;
         HANDLE_ERROR(cudaMalloc(&subgraphs, NUM_BLOCKS * sizeof(InducedSubgraph)));
 
-        int const storage_units_per_vertex_set = MAX_DEG / 64;
         // Initialise stacks
         int const max_entries = k * MAX_DEG / WARPS_PER_BLOCK;
         for (int i = 0; i < NUM_WARPS; ++i) {
             Stack& stack = stacks[i];
             stack.vertices = nullptr;
-            HANDLE_ERROR(cudaMalloc(&stack.vertices, max_entries * storage_units_per_vertex_set * sizeof(*stack.vertices)));
-            HANDLE_ERROR(cudaMemset(stack.vertices, -1 /*1*/, storage_units_per_vertex_set * sizeof(*stack.vertices))); // first stack entry
+            HANDLE_ERROR(cudaMalloc(&stack.vertices, max_entries * MAX_DEG * sizeof(*stack.vertices)));
+            HANDLE_ERROR(cudaMemset(stack.vertices, /* -1 */1, MAX_DEG * sizeof(*stack.vertices))); // first stack entry
 
             stack.level = nullptr;
             HANDLE_ERROR(cudaMalloc(&stack.level, max_entries * sizeof(*stack.level)));
@@ -316,61 +312,28 @@ struct Data {
 
 __constant__ Data global_data;
 
-// https://stackoverflow.com/a/3208376
-#define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c"
-#define BYTE_TO_BINARY(byte)  \
-  ((byte) & 0x80 ? '1' : '0'), \
-  ((byte) & 0x40 ? '1' : '0'), \
-  ((byte) & 0x20 ? '1' : '0'), \
-  ((byte) & 0x10 ? '1' : '0'), \
-  ((byte) & 0x08 ? '1' : '0'), \
-  ((byte) & 0x04 ? '1' : '0'), \
-  ((byte) & 0x02 ? '1' : '0'), \
-  ((byte) & 0x01 ? '1' : '0')
+__device__ void intersect_adjacent(InducedSubgraph const& subgraph, bool const* vertex_set, int vertex, bool* out_vertex_set) {
+        auto const* row = subgraph.adjacency_matrix + vertex * subgraph.len;
 
-#define QWORD_TO_BINARY_HIGHER(name, qword) \
-printf(name ": Bytes 7, 6, 5, 4: " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN "\n",\
-    BYTE_TO_BINARY(qword>>56), BYTE_TO_BINARY(qword>>48), BYTE_TO_BINARY(qword>>40), BYTE_TO_BINARY(qword>>32));
-
-#define QWORD_TO_BINARY_LOWER(name, qword) \
-printf(name ": Bytes 3, 2, 1, 0: " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN " " BYTE_TO_BINARY_PATTERN "\n",\
-    BYTE_TO_BINARY(qword>>24), BYTE_TO_BINARY(qword>>16), BYTE_TO_BINARY(qword>>8), BYTE_TO_BINARY(qword));
-
-__device__ void intersect_adjacent(InducedSubgraph const& subgraph, unsigned long long const* vertex_set, int vertex, unsigned long long* out_vertex_set) {
-    auto const* row = subgraph.adjacency_matrix + vertex * subgraph.vs;
-
-    for (int i = threadIdx.x % WARP_SIZE; i < subgraph.len_qwords; i += WARP_SIZE) {
-        debug({
-            printf("Block %i, Thread %i: I'm intersecting %i-th vertex slice: vertex_set[%i]=(%lli), row[%i] = (%llx)\n",
-                blockIdx.x, threadIdx.x, i, i, vertex_set[i], i, row[i]);
-            QWORD_TO_BINARY_HIGHER("Set", vertex_set[i]);
-            QWORD_TO_BINARY_LOWER("Set", vertex_set[i]);
-            QWORD_TO_BINARY_HIGHER("Row", row[i]);
-            QWORD_TO_BINARY_LOWER("Row", row[i]);
-        });
-        out_vertex_set[i] = vertex_set[i] & row[i]; // set each vertex as in or out of set
+        for (int i = threadIdx.x % WARP_SIZE; i < subgraph.len; i += WARP_SIZE) {
+            debug(printf("Block %i, Thread %i: I'm intersecting %i-th vertex: vertex_set[%i]=%i, row[%i]=%i\n",
+                    blockIdx.x, threadIdx.x, i, i, vertex_set[i], i, row[i]));
+            out_vertex_set[i] = vertex_set[i] && row[i]; // set vertex as in or out of set
+        }
     }
-}
 
-__device__ void copy_adjacent(InducedSubgraph const& subgraph, int vertex, unsigned long long* out_vertex_set) {
-    auto const* row = subgraph.adjacency_matrix + vertex * subgraph.vs;
+__device__ void copy_adjacent(InducedSubgraph const& subgraph, int vertex, bool* out_vertex_set) {
+    auto const* row = subgraph.adjacency_matrix + vertex * subgraph.len;
 
-    for (int i = threadIdx.x; i < subgraph.len_qwords; i += WARP_SIZE) {
-        debug({
-            printf("Block %i, Thread %i: I'm copying %i-th vertex slice: row[%i] = (%llx)\n",
-                blockIdx.x, threadIdx.x, i, i, row[i]);
-            QWORD_TO_BINARY_HIGHER("Row", row[i]);
-            QWORD_TO_BINARY_LOWER("Row", row[i]);
-        });
+    for (int i = threadIdx.x; i < subgraph.len; i += WARP_SIZE) {
         out_vertex_set[i] = row[i]; // set each vertex as in or out of row
     }
 }
 
-__device__ bool vertex_set_nonempty(unsigned long long const* set, int const vs) {
+__device__ bool vertex_set_nonempty(bool const* set, int const len) {
     int const tid = threadIdx.x % WARP_SIZE;
     int const warp_id = threadIdx.x / WARP_SIZE;
 
-    int const len_qwords = CEIL_DIV(vs, 64);
 
     __shared__ bool nonempty[WARPS_PER_BLOCK];
 
@@ -392,21 +355,21 @@ __device__ bool vertex_set_nonempty(unsigned long long const* set, int const vs)
     // }
 
     if (tid == 0) {
-        for (int i = 0; i < len_qwords; ++i) {
+        for (int i = 0; i < len; ++i) {
             nonempty[warp_id] |= set[i];
         }
     }
     __syncwarp();
 
-    debug(
-        if (tid == 0) {
-            printf("set_nonempty([ ");
-            for (int i = 0; i < vs; ++i) {
-                printf("%i ", !!(set[i / 64] & (1ULL << i % 64)));
-            }
-            printf("]) = %i\n", nonempty[warp_id]);
-        }
-    )
+    // debug(
+    //     if (tid == 0) {
+    //         printf("set_nonempty([ ");
+    //         for (int i = 0; i < vs; ++i) {
+    //             printf("%i ", !!(set[i / 64] & (1ULL << i % 64)));
+    //         }
+    //         printf("]) = %i\n", nonempty[warp_id]);
+    //     }
+    // )
 
     return nonempty[warp_id];
 }
@@ -476,7 +439,7 @@ __global__ void kernel(unsigned long long *count) {
             debug(if (thread_id == 0 && warp_id == 0) print_subgraph(subgraph));
         }
         InducedSubgraph const& subgraph = data.subgraphs[block_id];
-        int const vs = subgraph.vs;
+        int const vs = subgraph.len;
 
         // Initialise empty stack.
         if (thread_id == 0) {
@@ -505,7 +468,7 @@ __global__ void kernel(unsigned long long *count) {
                     );
                     __syncwarp();
 
-                    unsigned long long* new_vertices = assigned_stack.vertices + (assigned_stack_top + 1) * MAX_DEG / 64;
+                    bool* new_vertices = assigned_stack.vertices + (assigned_stack_top + 1) * MAX_DEG;
                     debug(if (thread_id == 0) printf("Block %i, Vertex %i, Warp %i: Copying subgraph's vertex %i.\n",
                                                         block_id, chosen_vertex, warp_id, v)
                     );
@@ -548,7 +511,7 @@ __global__ void kernel(unsigned long long *count) {
             }
             for (int v = 0; v < vs; ++v) {
                 __syncwarp();
-                if (vertex_set_contains(stack.vertices, current, v)) { // entry.vertices.contains(v)
+                if (stack.vertices[MAX_DEG * current + v]) { // entry.vertices.contains(v)
                     // We've found a `level`-level clique.
                     if (thread_id == 0) {
                         int* level_cliques = &cliques[warp_id][stack.level[current]];
@@ -561,11 +524,11 @@ __global__ void kernel(unsigned long long *count) {
 
                     // Let's explore deeper.
                     if (stack.level[current] + 1 < data.k) { // entry.level + 1 < k
-                        unsigned long long* new_vertices = stack.vertices + (stack_top + 1) * MAX_DEG / 64;
+                        bool* new_vertices = stack.vertices + (stack_top + 1) * MAX_DEG;
                         debug(if (thread_id == 0) printf("Block %i, Vertex %i, Warp %i: Intersecting with subgraph's vertex %i.\n",
                                                          block_id, chosen_vertex, warp_id, v)
                         );
-                        intersect_adjacent(subgraph, stack.vertices + current * MAX_DEG / 64, v, new_vertices);
+                        intersect_adjacent(subgraph, stack.vertices + current * MAX_DEG, v, new_vertices);
 
                         __syncwarp();
 
@@ -601,24 +564,20 @@ __global__ void kernel(unsigned long long *count) {
 
     __syncthreads();
 
-    // if (thread_id == 0) { // DEBUG@@@R#@@#@T@@$T$@T@
-    //     debug(printf("block %i warp %i: 2-Cliques num=%i\n", block_id, warp_id, cliques[0][1]));
-    // }
-
     // if (warp_id != 0) {
     //     if (thread_id < data.k) {
     //         atomicAdd_block(&cliques[0][thread_id], cliques[warp_id][thread_id]);
     //     }
     // }
 
-    __syncthreads();
+    // __syncthreads();
 
-    if (thread_id < data.k) {
-        atomicAdd(&count[thread_id], (unsigned long long)cliques[warp_id][thread_id]);
-    }
-    // for (int i = thread_id; i < data.k; i += blockDim.x) {
-    //     atomicAdd(&count[i], (unsigned long long)cliques[warp_id][i]);
+    // if (thread_id < data.k) {
+    //     atomicAdd(&count[thread_id], (unsigned long long)cliques[warp_id][thread_id]);
     // }
+    for (int i = thread_id; i < data.k; i += blockDim.x) {
+        atomicAdd(&count[i], (unsigned long long)cliques[warp_id][i]);
+    }
 
     debug(
         __syncthreads();
