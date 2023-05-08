@@ -21,9 +21,9 @@
 #define MAX_K 12
 #define MAX_DEG 1024
 #define MODULO 1'000'000'000;
-#define BLOCK_SIZE 64
+#define BLOCK_SIZE 128
 // #define BLOCK_SIZE 2
-#define NUM_BLOCKS 256
+#define NUM_BLOCKS 128
 // #define NUM_BLOCKS 1
 
 namespace cpu { namespace {
