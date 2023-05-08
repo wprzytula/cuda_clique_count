@@ -262,9 +262,6 @@ struct Data {
     CSR csr;
     InducedSubgraph* subgraphs;
 
-    // __host__ __device__ Data() : k{0} {} // initialised, for being in __constant__
-
-    // Data(cpu::CSR const& edges, int const k) : k{k} {
     void init(cpu::CSR const& edges, int const k) {
         this->k = k;
         csr.vs = edges.n;
@@ -292,13 +289,14 @@ struct Data {
         subgraphs = nullptr;
         HANDLE_ERROR(cudaMalloc(&subgraphs, NUM_BLOCKS * sizeof(InducedSubgraph)));
 
+        int const storage_units_per_vertex_set = MAX_DEG / 64;
         // Initialise stacks
         int const max_entries = k * MAX_DEG;
         for (int i = 0; i < NUM_BLOCKS; ++i) {
             Stack& stack = stacks[i];
             stack.vertices = nullptr;
-            HANDLE_ERROR(cudaMalloc(&stack.vertices, max_entries * MAX_DEG / 64 * sizeof(*stack.vertices)));
-            HANDLE_ERROR(cudaMemset(stack.vertices, -1 /*1*/, MAX_DEG / 64 * sizeof(*stack.vertices))); // first stack entry
+            HANDLE_ERROR(cudaMalloc(&stack.vertices, max_entries * storage_units_per_vertex_set * sizeof(*stack.vertices)));
+            HANDLE_ERROR(cudaMemset(stack.vertices, -1 /*1*/, storage_units_per_vertex_set * sizeof(*stack.vertices))); // first stack entry
 
             stack.level = nullptr;
             HANDLE_ERROR(cudaMalloc(&stack.level, max_entries * sizeof(*stack.level)));
@@ -401,7 +399,7 @@ __device__ int acquire_next_vertex(Data const& data) {
 }
 
 __device__ bool vertex_set_contains(unsigned long long const* vertex_set, int const current_frame, int const v) {
-    // if (debug && (threadIdx.x == 0 || threadIdx.x == 32))
+    // if (debug && threadIdx.x == 0)
     //     printf("Thread %i: set: %p, current: %i, v: %i\n", threadIdx.x, vertex_set, current_frame, v);
     // __syncthreads();
 
@@ -439,7 +437,7 @@ __global__ void kernel(unsigned long long *count) {
 
     while ((chosen_vertex = acquire_next_vertex(data)) < data.csr.vs) {
         debug (if (thread_id == 0) {
-            printf("Block %i has acquired vertex %i\n", block_id, chosen_vertex);
+            printf("\n ACQUISITION: Block %i has acquired vertex %i\n", block_id, chosen_vertex);
         })
 
         // Compute InducedSubgraph
